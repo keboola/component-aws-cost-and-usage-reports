@@ -195,11 +195,11 @@ class Component(KBCEnvHandler):
                           'MaxItems': 100000,
                           'PageSize': 1000
                       })
-        has_more = True
+
         counter = 0
         pages = paginator.paginate(**params)
         for page in pages:
-            keys = {}
+
             for obj in page.get('Contents', []):
                 key = obj['Key']
 
