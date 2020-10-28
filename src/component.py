@@ -158,6 +158,10 @@ class Component(KBCEnvHandler):
     def _download_report_chunks(self, manifest, output_folder):
         result_files = []
         for key in manifest['reportKeys']:
+            # support for // syntax
+            if '//' in manifest['report_folder']:
+                key_split = key.split('/')
+                key = f"{manifest['report_folder']}/{key_split[-2]}/{key_split[-1]}"
             chunk_file_name = key.replace('/', '_')
             result_file_path = os.path.join(output_folder, chunk_file_name)
             # download
