@@ -218,7 +218,8 @@ class Component(KBCEnvHandler):
         if self.report_prefix.endswith('/'):
             self.report_prefix = self.report_prefix[:-1]
 
-        if not self.report_prefix.startswith('/'):
+        # prepend / in case the path is not with // syntax
+        if not self.report_prefix.startswith('/') and '//' not in self.report_prefix:
             self.report_prefix = '/' + self.report_prefix
         if not self.report_prefix.endswith('*'):
             self.report_prefix = self.report_prefix + '*'
