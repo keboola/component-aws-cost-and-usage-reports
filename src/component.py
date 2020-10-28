@@ -54,7 +54,6 @@ class Component(KBCEnvHandler):
             debug = True
         if debug:
             logging.getLogger().setLevel(logging.DEBUG)
-        logging.info('Running version %s', APP_VERSION)
         logging.info('Loading configuration...')
 
         try:
@@ -108,7 +107,7 @@ class Component(KBCEnvHandler):
         # download report files
 
         # init writer
-        writer = CachedOrthogonalDictWriter(output_file, current_header)
+        writer = CachedOrthogonalDictWriter(output_file, current_header, buffering=10000000)
 
         latest_timestamp = last_file_timestamp
         latest_report_id = last_report_id
@@ -124,7 +123,7 @@ class Component(KBCEnvHandler):
                 latest_report_id = man['assemblyId']
             downloaded_chunks = self._download_report_chunks(man, tmp_path)
 
-            logging.info("Normalizing headers, writing results.")
+            logging.info("Extracting files.")
             result_files = self._process_chunks(downloaded_chunks)
             self._normalize_headers_write(result_files, writer)
 
@@ -137,7 +136,7 @@ class Component(KBCEnvHandler):
                                "last_report_id": latest_report_id,
                                "report_header": result_header})
 
-        logging.info("Extraction finished.")
+        logging.info(f"Extraction finished at {datetime.now().isoformat()}.")
 
     def _retrieve_report_manifests(self, all_files, report_name):
         manifests = []
@@ -152,11 +151,15 @@ class Component(KBCEnvHandler):
                 manifest = json.loads(self._read_s3_file_contents(obj['Key']))
                 manifest['last_modified'] = obj['LastModified']
                 manifest['report_folder'] = obj['Key'].replace(f'/{manifest_file_name}', '')
+                manifest['period'] = parent_folder_name
                 manifests.append(manifest)
         return manifests
 
     def _download_report_chunks(self, manifest, output_folder):
         result_files = []
+        logging.info(
+            f"Downloading report ID {manifest['assemblyId']} for period {manifest['period']}"
+            f" in {len(manifest['reportKeys'])} report chunks.")
         for key in manifest['reportKeys']:
             # support for // syntax
             if '//' in manifest['report_folder']:
@@ -244,6 +247,7 @@ class Component(KBCEnvHandler):
     def _normalize_headers_write(self, result_files, writer):
         # normalize headers
         for res_file in result_files:
+            logging.info(f"Normalizing file {res_file} {datetime.now().isoformat()}")
             with open(res_file) as in_file:
                 reader = csv.DictReader(in_file)
                 for row in reader:
