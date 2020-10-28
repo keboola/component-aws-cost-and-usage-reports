@@ -3,7 +3,8 @@
   "title": "Configuration",
   "required": [
     "aws_parameters",
-    "report_path_prefix"
+    "report_path_prefix",
+    "min_date_since"
   ],
   "properties": {
     "aws_parameters": {
@@ -77,6 +78,12 @@
       "type": "string",
       "title": "Report prefix",
       "description": "The prefix as you set up in the AWS CUR config. In S3 bucket this is path to your report. E.g. my-report or some/long/prefix/myreport"
+    },
+    "min_date_since": {
+      "propertyOrder": 3,
+      "type": "string",
+      "title": "Minimum date since",
+      "description": "Lowest report date to download. Applies only on first run, reset the state to backfill. Date in YYYY-MM-DD format or dateparser string i.e. 5 days ago, 1 month ago, yesterday, etc. If left empty, all records are downloaded."
     }
   }
 }

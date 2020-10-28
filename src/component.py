@@ -26,6 +26,8 @@ KEY_AWS_API_KEY_SECRET = '#api_key_secret'
 KEY_AWS_REGION = 'aws_region'
 KEY_AWS_S3_BUCKET = 's3_bucket'
 
+KEY_MIN_DATE = 'min_date_since'
+
 KEY_REPORT_PATH_PREFIX = 'report_path_prefix'
 
 # #### Keep for debug
@@ -79,12 +81,13 @@ class Component(KBCEnvHandler):
 
         # last state
         last_state = self.get_state_file()
+        start_date, end_date = self.get_date_period_converted(params.get(KEY_MIN_DATE, '2000-01-01'), 'today')
 
         last_file_timestamp = last_state.get('last_file_timestamp')
         if last_file_timestamp:
             last_file_timestamp = datetime.fromisoformat(last_file_timestamp)
         else:
-            last_file_timestamp = datetime(2000, 1, 1)
+            last_file_timestamp = start_date
             last_file_timestamp = pytz.utc.localize(last_file_timestamp)
 
         last_report_id = last_state.get('last_report_id')
