@@ -1,0 +1,103 @@
+{
+  "type": "object",
+  "title": "extractor configuration",
+  "required": [
+    "project_id",
+    "#api_token",
+    "period_from",
+    "period_to",
+    "relative_period",
+    "metrics",
+    "backfill_mode"
+  ],
+  "properties": {
+    "project_id": {
+      "type": "string",
+      "title": "Project ID",
+      "propertyOrder": 100
+    },
+    "#api_token": {
+      "type": "string",
+      "title": "API token",
+      "format": "password",
+      "propertyOrder": 200
+    },
+    "period_from": {
+      "type": "string",
+      "format": "date",
+      "title": "Period from date [including]",
+      "propertyOrder": 300
+    },
+    "period_to": {
+      "type": "string",
+      "format": "date",
+      "title": "Period to date [excluding]",
+      "propertyOrder": 400
+    },
+    "relative_period": {
+      "type": "string",
+      "title": "Relative period from now (utc)",
+      "description": "Relative period in format: '5 hours ago', 'yesterday','3 days ago', '4 months ago', '2 years ago', 'today'. Overrides `from` and `to` parameters.",
+      "propertyOrder": 450
+    },
+    "backfill_mode": {
+      "type": "number",
+      "title": "Backfill mode",
+      "description": "If backfill mode is enabled, each consecutive run of the component will continue from the end of the last run period, until current date is reached. The From and To date parameters are used to define Start date of the back-fill and also relative window of each run.",
+      "propertyOrder": 455,
+      "enum": [
+        0,
+        1
+      ],
+      "default": 0,
+      "options": {
+        "enum_titles": [
+          "No",
+          "Yes"
+        ]
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "title": "Example array of group of string objects",
+      "description": "Group of string objects alligned in grid",
+      "items": {
+        "format": "grid",
+        "type": "object",
+        "title": "Items of array, multiple objects",
+        "required": [
+          "metric",
+          "modificator"
+        ],
+        "properties": {
+          "metric": {
+            "enum": [
+              "NoVt",
+              "TotTm",
+              "NoPV"
+            ],
+            "type": "string",
+            "default": "NoPV",
+            "title": "Metric",
+            "description": "First object, enum of strings",
+            "propertyOrder": 1000
+          },
+          "modificator": {
+            "enum": [
+              "none",
+              "change",
+              "share",
+              "share_in_total",
+              "change_in_percentage"
+            ],
+            "type": "string",
+            "title": "Mdificator",
+            "description": "Second object",
+            "default": "daily",
+            "propertyOrder": 2000
+          }
+        }
+      }
+    }
+  }
+}
