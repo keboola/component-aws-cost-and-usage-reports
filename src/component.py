@@ -84,8 +84,8 @@ class Component(KBCEnvHandler):
         params = self.cfg_params  # noqa
 
         # last state
-
-        start_date, end_date = self.get_date_period_converted(params.get(KEY_MIN_DATE, '2000-01-01'), 'today')
+        since = params.get(KEY_MIN_DATE) if params.get(KEY_MIN_DATE) else '2000-01-01'
+        start_date, end_date = self.get_date_period_converted(since, 'today')
 
         last_file_timestamp = self.last_state.get('last_file_timestamp')
         if last_file_timestamp:
@@ -130,7 +130,7 @@ class Component(KBCEnvHandler):
             downloaded_chunks = self._download_report_chunks(man, tmp_path)
 
             if self._check_header_needs_normalizing(man):
-                logging.info("Extracting files.")
+                logging.info(f"Extracting files.")
                 result_files = self._process_chunks(downloaded_chunks)
                 self._normalize_headers_write(result_files, normalizing_writer)
             else:
@@ -143,7 +143,7 @@ class Component(KBCEnvHandler):
         self.configuration.write_table_manifest(output_folder, columns=self.last_header)
         self.write_state_file({"last_file_timestamp": latest_timestamp.isoformat(),
                                "last_report_id": latest_report_id,
-                               "report_header": result_header})
+                               "report_header": self.last_header})
 
         logging.info(f"Extraction finished at {datetime.now().isoformat()}.")
 
