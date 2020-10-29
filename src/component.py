@@ -268,7 +268,6 @@ class Component(KBCEnvHandler):
                     writer.writerow(row)
 
     def _get_max_header(self, manifests):
-        max_header = set()
         for m in manifests:
             # normalize
             norm_cols = self._get_manifest_normalized_columns(m)
