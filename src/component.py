@@ -115,7 +115,7 @@ class Component(KBCEnvHandler):
         logging.info(f"{len(manifests)} recent reports found. Downloading...")
 
         # init writer
-        max_header = self._get_max_header(manifests)
+        max_header = self._get_max_header_denormalized(manifests)
         normalized_file = os.path.join(output_folder, 'norm_file')
         normalizing_writer = CachedOrthogonalDictWriter(normalized_file, max_header, buffering=10000000)
 
@@ -140,7 +140,7 @@ class Component(KBCEnvHandler):
 
         result_header = normalizing_writer.fieldnames
         normalizing_writer.close()
-        self.configuration.write_table_manifest(output_folder, columns=result_header)
+        self.configuration.write_table_manifest(output_folder, columns=self.last_header)
         self.write_state_file({"last_file_timestamp": latest_timestamp.isoformat(),
                                "last_report_id": latest_report_id,
                                "report_header": result_header})
@@ -267,21 +267,24 @@ class Component(KBCEnvHandler):
                 for row in reader:
                     writer.writerow(row)
 
-    def _get_max_header(self, manifests):
+    def _get_max_header_denormalized(self, manifests):
         for m in manifests:
             # normalize
             norm_cols = self._get_manifest_normalized_columns(m)
             if not set(norm_cols).issubset(set(self.last_header)):
                 self.last_header = norm_cols
-        return self.last_header
+
+        # denormalize for writer
+        max_header = [h.replace('__', '/') for h in self.last_header]
+        return max_header
 
     def _get_manifest_normalized_columns(self, manifest):
         # normalize
-        man_cols = [col['name'] for col in manifest['columns']]
+        man_cols = [col['category'] + '/' + col['name'] for col in manifest['columns']]
         return self._kbc_normalize_header(man_cols)
 
     def _kbc_normalize_header(self, header):
-        return [h.replace('/', '_') for h in header]
+        return [h.replace('/', '__') for h in header]
 
     def _move_chunks(self, downloaded_chunks, output_folder):
         for chunk in downloaded_chunks:
