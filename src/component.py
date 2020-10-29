@@ -130,7 +130,7 @@ class Component(KBCEnvHandler):
             downloaded_chunks = self._download_report_chunks(man, tmp_path)
 
             if self._check_header_needs_normalizing(man):
-                logging.info(f"Extracting files.")
+                logging.info("Extracting files.")
                 result_files = self._process_chunks(downloaded_chunks)
                 self._normalize_headers_write(result_files, normalizing_writer)
             else:
@@ -138,7 +138,6 @@ class Component(KBCEnvHandler):
 
         # finalize
 
-        result_header = normalizing_writer.fieldnames
         normalizing_writer.close()
         self.configuration.write_table_manifest(output_folder, columns=self.last_header)
         self.write_state_file({"last_file_timestamp": latest_timestamp.isoformat(),
