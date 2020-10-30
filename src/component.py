@@ -15,7 +15,6 @@ from pathlib import Path
 
 import boto3
 import pytz
-from kbc.csv_tools import CachedOrthogonalDictWriter
 from kbc.env_handler import KBCEnvHandler
 
 # configuration variables
@@ -114,10 +113,8 @@ class Component(KBCEnvHandler):
 
         logging.info(f"{len(manifests)} recent reports found. Downloading...")
 
-        # init writer
+        # get max header
         max_header = self._get_max_header_denormalized(manifests)
-        normalized_file = os.path.join(output_folder, 'norm_file')
-        normalizing_writer = CachedOrthogonalDictWriter(normalized_file, max_header, buffering=10000000)
 
         for man in manifests:
             # just in case
@@ -132,13 +129,11 @@ class Component(KBCEnvHandler):
             if self._check_header_needs_normalizing(man):
                 logging.info("Extracting files.")
                 result_files = self._process_chunks(downloaded_chunks)
-                self._normalize_headers_write(result_files, normalizing_writer)
+                self._normalize_headers_write(result_files, output_folder, max_header)
             else:
                 self._move_chunks(downloaded_chunks, output_folder)
 
         # finalize
-
-        normalizing_writer.close()
         self.configuration.write_table_manifest(output_folder, columns=self.last_header)
         self.write_state_file({"last_file_timestamp": latest_timestamp.isoformat(),
                                "last_report_id": latest_report_id,
@@ -257,11 +252,13 @@ class Component(KBCEnvHandler):
             extracted_files.append(extracted_file)
         return extracted_files
 
-    def _normalize_headers_write(self, result_files, writer):
+    def _normalize_headers_write(self, result_files, output_folder, header):
         # normalize headers
         for res_file in result_files:
             logging.info(f"Normalizing file {res_file} {datetime.now().isoformat()}")
-            with open(res_file) as in_file:
+            new_file = os.path.join(output_folder, os.path.basename(res_file))
+            with open(res_file) as in_file, open(new_file, 'w') as out_file:
+                writer = csv.DictWriter(out_file, fieldnames=header)
                 reader = csv.DictReader(in_file)
                 for row in reader:
                     writer.writerow(row)
