@@ -119,11 +119,13 @@ class Component(KBCEnvHandler):
         for man in manifests:
             # just in case
             if man['last_modified'] < last_file_timestamp or man['assemblyId'] == self.last_report_id:
+                logging.info(f"Report ID {man['assemblyId']} already donwloaded, skipping.")
                 continue
 
             if last_file_timestamp < man['last_modified']:
                 latest_timestamp = man['last_modified']
                 latest_report_id = man['assemblyId']
+            logging.info(f"Downloading report {man['assemblyId']} in {len(man['reportKeys'])} chunks")
             downloaded_chunks = self._download_report_chunks(man, tmp_path)
 
             if self._check_header_needs_normalizing(man):
@@ -266,9 +268,10 @@ class Component(KBCEnvHandler):
     def _get_max_header_denormalized(self, manifests):
         for m in manifests:
             # normalize
-            norm_cols = self._get_manifest_normalized_columns(m)
-            if not set(norm_cols).issubset(set(self.last_header)):
-                self.last_header = norm_cols
+            norm_cols = set(self._get_manifest_normalized_columns(m))
+            if not norm_cols.issubset(set(self.last_header)):
+                norm_cols.update(set(self.last_header))
+                self.last_header = list(norm_cols)
 
         # denormalize for writer
         max_header = [h.replace('__', '/') for h in self.last_header]
