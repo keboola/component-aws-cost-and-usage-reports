@@ -259,7 +259,8 @@ class Component(KBCEnvHandler):
         for res_file in result_files:
             logging.info(f"Normalizing file {res_file} {datetime.now().isoformat()}")
             new_file = os.path.join(output_folder, os.path.basename(res_file))
-            with open(res_file) as in_file, open(new_file, 'w') as out_file:
+            with open(res_file, buffering=2048 * 2048) as in_file, \
+                    open(new_file, 'w', buffering=2048 * 2048) as out_file:
                 writer = csv.DictWriter(out_file, fieldnames=header)
                 reader = csv.DictReader(in_file)
                 for row in reader:
