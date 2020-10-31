@@ -50,7 +50,7 @@ class Component(KBCEnvHandler):
         # override debug from config
         if self.cfg_params.get(KEY_DEBUG):
             debug = True
-            
+          
         if debug:
             logging.getLogger().setLevel(logging.DEBUG)
         else:
