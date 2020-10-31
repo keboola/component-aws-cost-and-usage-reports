@@ -81,10 +81,10 @@ class SnowflakeClient:
         COPY INTO {table_name} ({', '.join(columns)}) FROM {path_to_object}
              CREDENTIALS =(aws_key_id = '{aws_access_key_id}' aws_secret_key = '{aws_secret_access_key}')
         """
-        query += f"FILE_FORMAT = ("
+        query += "FILE_FORMAT = ("
         for key in file_format:
             query += f"{key}={file_format[key]} "
-        query += f");"
+        query += ");"
         self.execute_query(query)
 
     def _wrap_columns_in_quotes(self, columns):
