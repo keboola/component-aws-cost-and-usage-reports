@@ -3,19 +3,18 @@ Template Component main class.
 
 '''
 
-import csv
-import gzip
+import boto3
 import json
 import logging
 import os
+import pytz
 import shutil
 import sys
 from datetime import datetime
+from kbc.env_handler import KBCEnvHandler
 from pathlib import Path
 
-import boto3
-import pytz
-from kbc.env_handler import KBCEnvHandler
+from woskpace_client import SnowflakeClient
 
 # configuration variables
 # aws params
@@ -51,8 +50,11 @@ class Component(KBCEnvHandler):
         # override debug from config
         if self.cfg_params.get(KEY_DEBUG):
             debug = True
+            
         if debug:
             logging.getLogger().setLevel(logging.DEBUG)
+        else:
+            logging.getLogger('snowflake.connector').setLevel(logging.WARNING)  # avoid detail logs from the library
         logging.info('Loading configuration...')
 
         try:
@@ -66,10 +68,23 @@ class Component(KBCEnvHandler):
         self.report_prefix = self.cfg_params[KEY_REPORT_PATH_PREFIX]
         self._cleanup_report_prefix()
 
-        self.client = boto3.client('s3',
-                                   region_name=self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_REGION],
-                                   aws_access_key_id=self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_ID],
-                                   aws_secret_access_key=self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_SECRET])
+        self.s3_client = boto3.client('s3',
+                                      region_name=self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_REGION],
+                                      aws_access_key_id=self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_ID],
+                                      aws_secret_access_key=self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_SECRET])
+
+        snfk_authorisation = self.configuration.get_authorization()['workspace']
+        params = self.cfg_params  # noqa
+        snfwlk_credentials = {
+            "account": snfk_authorisation['host'].replace('.snowflakecomputing.com', ''),
+            "user": snfk_authorisation['user'],
+            "password": snfk_authorisation['password'],
+            "database": snfk_authorisation['database'],
+            "schema": snfk_authorisation['schema'],
+            "warehouse": snfk_authorisation['warehouse']
+        }
+
+        self.snowflake_client = SnowflakeClient(**snfwlk_credentials)
 
         # last state
         self.last_state = self.get_state_file()
@@ -104,10 +119,9 @@ class Component(KBCEnvHandler):
         manifests = self._retrieve_report_manifests(all_files, report_name)
 
         # prep the output
-        output_folder = os.path.join(self.tables_out_path, report_name)
+        output_table = os.path.join(self.tables_out_path, report_name)
         tmp_path = os.path.join(self.data_path, 'tmp')
         os.makedirs(tmp_path, exist_ok=True)
-        os.makedirs(output_folder, exist_ok=True)
 
         # download report files
 
@@ -115,6 +129,9 @@ class Component(KBCEnvHandler):
 
         # get max header
         max_header = self._get_max_header_denormalized(manifests)
+        # create result table
+        self.snowflake_client.open_connection()
+        self._create_result_table(report_name, max_header)
 
         for man in manifests:
             # just in case
@@ -126,17 +143,12 @@ class Component(KBCEnvHandler):
                 latest_timestamp = man['last_modified']
                 latest_report_id = man['assemblyId']
             logging.info(f"Downloading report {man['assemblyId']} in {len(man['reportKeys'])} chunks")
-            downloaded_chunks = self._download_report_chunks(man, tmp_path)
 
-            if self._check_header_needs_normalizing(man):
-                logging.info("Extracting files.")
-                result_files = self._process_chunks(downloaded_chunks)
-                self._normalize_headers_write(result_files, output_folder, max_header)
-            else:
-                self._move_chunks(downloaded_chunks, output_folder)
+            self._upload_report_chunks_to_workspace(man, report_name)
 
         # finalize
-        self.configuration.write_table_manifest(output_folder, columns=self.last_header)
+        self.snowflake_client.close()
+        self.configuration.write_table_manifest(output_table, columns=self.last_header)
         self.write_state_file({"last_file_timestamp": latest_timestamp.isoformat(),
                                "last_report_id": latest_report_id,
                                "report_header": self.last_header})
@@ -165,27 +177,27 @@ class Component(KBCEnvHandler):
                 manifests.append(manifest)
         return manifests
 
-    def _download_report_chunks(self, manifest, output_folder):
-        result_files = []
+    def _upload_report_chunks_to_workspace(self, manifest, table_name):
         logging.info(
-            f"Downloading report ID {manifest['assemblyId']} for period {manifest['period']}"
+            f"Uploading report ID {manifest['assemblyId']} for period {manifest['period']}"
             f" in {len(manifest['reportKeys'])} report chunks.")
+        columns = self._get_manifest_normalized_columns(manifest)
         for key in manifest['reportKeys']:
             # support for // syntax
             if '//' in manifest['report_folder']:
                 key_split = key.split('/')
                 key = f"{manifest['report_folder']}/{key_split[-2]}/{key_split[-1]}"
-            chunk_file_name = key.replace('/', '_')
-            result_file_path = os.path.join(output_folder, chunk_file_name)
+
             # download
-            self.client.download_file(Bucket=self.bucket,
-                                      Key=key,
-                                      Filename=result_file_path)
-            result_files.append(result_file_path)
-        return result_files
+            s3_path = f's3://{self.bucket}/{key}'
+            self.snowflake_client.copy_csv_into_table_from_s3(table_name,
+                                                              columns,
+                                                              s3_path,
+                                                              self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_ID],
+                                                              self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_SECRET])
 
     def _read_s3_file_contents(self, key):
-        response = self.client.get_object(Bucket=self.bucket, Key=key)
+        response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
         return response['Body'].read()
 
     def _try_to_parse_report_period(self, folder_name):
@@ -208,7 +220,7 @@ class Component(KBCEnvHandler):
         else:
             is_wildcard = False
 
-        paginator = self.client.get_paginator('list_objects_v2')
+        paginator = self.s3_client.get_paginator('list_objects_v2')
         params = dict(Bucket=bucket,
                       Prefix=prefix,
                       PaginationConfig={
@@ -241,31 +253,6 @@ class Component(KBCEnvHandler):
         if not self.report_prefix.endswith('*'):
             self.report_prefix = self.report_prefix + '*'
 
-    def _process_chunks(self, downloaded_chunks):
-        extracted_files = []
-        for chunk in downloaded_chunks:
-            # extract
-            extracted_file = chunk.replace('.gz', '')
-            with gzip.open(chunk, 'rb') as f_in:
-                with open(chunk.replace('.gz', ''), 'wb') as f_out:
-                    shutil.copyfileobj(f_in, f_out)
-            # delete gzip
-            os.remove(chunk)
-            extracted_files.append(extracted_file)
-        return extracted_files
-
-    def _normalize_headers_write(self, result_files, output_folder, header):
-        # normalize headers
-        for res_file in result_files:
-            logging.info(f"Normalizing file {res_file} {datetime.now().isoformat()}")
-            new_file = os.path.join(output_folder, os.path.basename(res_file))
-            with open(res_file, buffering=2048 * 2048) as in_file, \
-                    open(new_file, 'w', buffering=2048 * 2048) as out_file:
-                writer = csv.DictWriter(out_file, fieldnames=header)
-                reader = csv.DictReader(in_file)
-                for row in reader:
-                    writer.writerow(row)
-
     def _get_max_header_denormalized(self, manifests):
         for m in manifests:
             # normalize
@@ -274,9 +261,7 @@ class Component(KBCEnvHandler):
                 norm_cols.update(set(self.last_header))
                 self.last_header = list(norm_cols)
 
-        # denormalize for writer
-        max_header = [h.replace('__', '/') for h in self.last_header]
-        return max_header
+        return self.last_header
 
     def _get_manifest_normalized_columns(self, manifest):
         # normalize
@@ -289,6 +274,13 @@ class Component(KBCEnvHandler):
     def _move_chunks(self, downloaded_chunks, output_folder):
         for chunk in downloaded_chunks:
             shutil.move(chunk, os.path.join(output_folder, os.path.basename(chunk)))
+
+    # TODO: support for datatypes
+    def _create_result_table(self, report_name, max_header):
+        columns = []
+        for h in max_header:
+            columns.append({"name": h, "type": 'TEXT'})
+        self.snowflake_client.create_table(report_name, columns)
 
 
 """

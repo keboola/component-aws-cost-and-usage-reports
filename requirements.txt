@@ -2,3 +2,6 @@ https://bitbucket.org/kds_consulting_team/keboola-python-util-lib/get/0.4.4.zip#
 mock
 freezegun
 boto3
+snowflake-connector-python
+snowflake-sqlalchemy
+
