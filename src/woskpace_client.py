@@ -11,9 +11,9 @@ class SnowflakeClient:
             account=account,
             user=user,
             password=password,
-            database=database,
-            schema=schema,
-            warehouse=warehouse,
+            database=self._wrap_in_quote(database),
+            schema=self._wrap_in_quote(schema),
+            warehouse=self._wrap_in_quote(warehouse),
             cache_column_metadata=True,
             echo=True
         ))
