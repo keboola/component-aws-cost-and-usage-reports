@@ -136,7 +136,7 @@ class Component(KBCEnvHandler):
         for man in manifests:
             # just in case
             if man['last_modified'] < last_file_timestamp or man['assemblyId'] == self.last_report_id:
-                logging.info(f"Report ID {man['assemblyId']} already donwloaded, skipping.")
+                logging.info(f"Report ID {man['assemblyId']} already downloaded, skipping.")
                 continue
 
             if last_file_timestamp < man['last_modified']:
