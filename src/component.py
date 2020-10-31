@@ -148,7 +148,8 @@ class Component(KBCEnvHandler):
 
         # finalize
         self.snowflake_client.close()
-        self.configuration.write_table_manifest(output_table,destination=f"in.c-{self.cfg_params['output_bucket']}.{report_name}",
+        self.configuration.write_table_manifest(output_table,
+                                                destination=f"in.c-{self.cfg_params['output_bucket']}.{report_name}",
                                                 columns=self.last_header)
         self.write_state_file({"last_file_timestamp": latest_timestamp.isoformat(),
                                "last_report_id": latest_report_id,
