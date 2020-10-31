@@ -4,7 +4,8 @@
   "required": [
     "aws_parameters",
     "report_path_prefix",
-    "min_date_since"
+    "min_date_since",
+    "output_bucket"
   ],
   "properties": {
     "aws_parameters": {
@@ -84,6 +85,13 @@
       "type": "string",
       "title": "Minimum date since",
       "description": "Lowest report date to download. Applies only on first run, reset the state to backfill. Date in YYYY-MM-DD format or dateparser string i.e. 5 days ago, 1 month ago, yesterday, etc. If left empty, all records are downloaded."
+    },
+    "output_bucket": {
+      "propertyOrder": 4,
+      "type": "string",
+      "title": "Output bucket name",
+      "description": "Name of the resulting IN storage bucket.",
+      "default": "aws-cur"
     }
   }
 }

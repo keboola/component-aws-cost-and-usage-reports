@@ -38,7 +38,7 @@ class SnowflakeClient:
 
     def create_table(self, name, columns: [dict]):
         query = f"""
-        CREATE OR REPLACE TABLE {name} (
+        CREATE OR REPLACE TABLE {self._wrap_in_quote(name)} (
         """
         col_defs = [f"\"{col['name']}\" {col['type']}" for col in columns]
         query += ', '.join(col_defs)
@@ -52,13 +52,14 @@ class SnowflakeClient:
         :param columns: dictionary {'name': ,'type'}
         :return:
         """
-
+        table_name = self._wrap_in_quote(table_name)
         existing_columns = self.get_table_column_names(table_name)
         for col in columns:
             if col['name'] not in existing_columns:
                 self.execute_query(f"ALTER TABLE {table_name} ADD COLUMN {col['name']} {col['type']};")
 
     def get_table_column_names(self, table_name):
+        table_name = self._wrap_in_quote(table_name)
         query = f"""select COLUMN_NAME
                         from INFORMATION_SCHEMA.COLUMNS
                         where TABLE_NAME = '{table_name}';
@@ -76,6 +77,7 @@ class SnowflakeClient:
         :param file_format:
         :return:
         """
+        table_name = self._wrap_in_quote(table_name)
         columns = self._wrap_columns_in_quotes(table_columns)
         query = f"""
         COPY INTO {table_name} ({', '.join(columns)}) FROM {path_to_object}
