@@ -272,6 +272,7 @@ class Component(KBCEnvHandler):
         for h in header:
             h.replace('/', '__')
             h.replace(':', '_')
+            normalized.append(h)
         return normalized
 
     def _move_chunks(self, downloaded_chunks, output_folder):
