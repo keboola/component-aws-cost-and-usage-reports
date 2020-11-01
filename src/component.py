@@ -1,14 +1,8 @@
-'''
-Template Component main class.
-
-'''
-
 import boto3
 import json
 import logging
 import os
 import pytz
-import shutil
 import sys
 from datetime import datetime
 from kbc.env_handler import KBCEnvHandler
@@ -32,10 +26,8 @@ KEY_REPORT_PATH_PREFIX = 'report_path_prefix'
 KEY_DEBUG = 'debug'
 
 # list of mandatory parameters => if some is missing, component will fail with readable message on initialization.
-MANDATORY_PARS = []
+MANDATORY_PARS = [KEY_AWS_PARAMS, KEY_REPORT_PATH_PREFIX]
 MANDATORY_IMAGE_PARS = []
-
-APP_VERSION = '0.0.1'
 
 
 class Component(KBCEnvHandler):
@@ -120,8 +112,6 @@ class Component(KBCEnvHandler):
 
         # prep the output
         output_table = os.path.join(self.tables_out_path, report_name)
-        tmp_path = os.path.join(self.data_path, 'tmp')
-        os.makedirs(tmp_path, exist_ok=True)
 
         # download report files
 
@@ -136,7 +126,7 @@ class Component(KBCEnvHandler):
         for man in manifests:
             # just in case
             if man['last_modified'] < last_file_timestamp or man['assemblyId'] == self.last_report_id:
-                logging.info(f"Report ID {man['assemblyId']} already downloaded, skipping.")
+                logging.warning(f"Report ID {man['assemblyId']} already downloaded, skipping.")
                 continue
 
             if last_file_timestamp < man['last_modified']:
@@ -148,7 +138,6 @@ class Component(KBCEnvHandler):
         # finalize
         self.snowflake_client.close()
         self.configuration.write_table_manifest(output_table,
-                                                destination=f"in.c-{self.cfg_params['output_bucket']}.{report_name}",
                                                 columns=self.last_header)
         self.write_state_file({"last_file_timestamp": latest_timestamp.isoformat(),
                                "last_report_id": latest_report_id,
@@ -274,10 +263,6 @@ class Component(KBCEnvHandler):
             new_h = new_h.replace(':', '_')
             normalized.append(new_h)
         return normalized
-
-    def _move_chunks(self, downloaded_chunks, output_folder):
-        for chunk in downloaded_chunks:
-            shutil.move(chunk, os.path.join(output_folder, os.path.basename(chunk)))
 
     # TODO: support for datatypes
     def _create_result_table(self, report_name, max_header):
