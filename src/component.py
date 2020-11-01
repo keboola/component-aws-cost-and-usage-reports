@@ -128,7 +128,7 @@ class Component(KBCEnvHandler):
         logging.info(f"{len(manifests)} recent reports found. Downloading...")
 
         # get max header
-        max_header = self._get_max_header_denormalized(manifests)
+        max_header = self._get_max_header_normalized(manifests)
         # create result table
         self.snowflake_client.open_connection()
         self._create_result_table(report_name, max_header)
@@ -156,11 +156,6 @@ class Component(KBCEnvHandler):
                                "report_header": self.last_header})
 
         logging.info(f"Extraction finished at {datetime.now().isoformat()}.")
-
-    def _check_header_needs_normalizing(self, manifest):
-        # normalize
-        norm_cols = self._get_manifest_normalized_columns(manifest)
-        return self.last_header and set(norm_cols) != set(self.last_header)
 
     def _retrieve_report_manifests(self, all_files, report_name):
         manifests = []
@@ -255,13 +250,14 @@ class Component(KBCEnvHandler):
         if not self.report_prefix.endswith('*'):
             self.report_prefix = self.report_prefix + '*'
 
-    def _get_max_header_denormalized(self, manifests):
+    def _get_max_header_normalized(self, manifests):
         for m in manifests:
             # normalize
             norm_cols = set(self._get_manifest_normalized_columns(m))
             if not norm_cols.issubset(set(self.last_header)):
                 norm_cols.update(set(self.last_header))
                 self.last_header = list(norm_cols)
+                self.last_header.sort()
 
         return self.last_header
 
@@ -271,7 +267,12 @@ class Component(KBCEnvHandler):
         return self._kbc_normalize_header(man_cols)
 
     def _kbc_normalize_header(self, header):
-        return [h.replace('/', '__') for h in header]
+        normalized = []
+
+        for h in header:
+            h.replace('/', '__')
+            h.replace(':', '_')
+        return normalized
 
     def _move_chunks(self, downloaded_chunks, output_folder):
         for chunk in downloaded_chunks:
