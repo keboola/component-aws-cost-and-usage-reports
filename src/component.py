@@ -142,7 +142,6 @@ class Component(KBCEnvHandler):
             if last_file_timestamp < man['last_modified']:
                 latest_timestamp = man['last_modified']
                 latest_report_id = man['assemblyId']
-            logging.info(f"Downloading report {man['assemblyId']} in {len(man['reportKeys'])} chunks")
 
             self._upload_report_chunks_to_workspace(man, report_name)
 
@@ -181,12 +180,13 @@ class Component(KBCEnvHandler):
         columns = self._get_manifest_normalized_columns(manifest)
         for key in manifest['reportKeys']:
             # support for // syntax
+            key_split = key.split('/')
             if '//' in manifest['report_folder']:
-                key_split = key.split('/')
                 key = f"{manifest['report_folder']}/{key_split[-2]}/{key_split[-1]}"
 
             # download
             s3_path = f's3://{self.bucket}/{key}'
+            logging.info(f"Uploading chunk {key_split[-1]}")
             self.snowflake_client.copy_csv_into_table_from_s3(table_name,
                                                               columns,
                                                               s3_path,
@@ -270,9 +270,9 @@ class Component(KBCEnvHandler):
         normalized = []
 
         for h in header:
-            h.replace('/', '__')
-            h.replace(':', '_')
-            normalized.append(h)
+            new_h = h.replace('/', '__')
+            new_h = new_h.replace(':', '_')
+            normalized.append(new_h)
         return normalized
 
     def _move_chunks(self, downloaded_chunks, output_folder):
