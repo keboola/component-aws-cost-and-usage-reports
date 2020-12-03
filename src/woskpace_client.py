@@ -3,8 +3,8 @@ from snowflake.sqlalchemy import URL
 
 
 class SnowflakeClient:
-    _DEFAULT_FILE_FORMAT = dict(TYPE="CSV", FIELD_DELIMITER="','", SKIP_HEADER=1, FIELD_OPTIONALLY_ENCLOSED_BY="'\"'",
-                                ERROR_ON_COLUMN_COUNT_MISMATCH=False)
+    DEFAULT_FILE_FORMAT = dict(TYPE="CSV", FIELD_DELIMITER="','", SKIP_HEADER=1, FIELD_OPTIONALLY_ENCLOSED_BY="'\"'",
+                               ERROR_ON_COLUMN_COUNT_MISMATCH=False)
 
     def __init__(self, account, user, password, database, schema, warehouse):
         self._engine = sqlalchemy.create_engine(URL(
@@ -68,7 +68,7 @@ class SnowflakeClient:
 
     def copy_csv_into_table_from_s3(self, table_name, table_columns, path_to_object, aws_access_key_id,
                                     aws_secret_access_key,
-                                    file_format: dict = _DEFAULT_FILE_FORMAT):
+                                    file_format: dict = None):
         """
         Import from S3 file by default CSV format with skip header setup and ERROR_ON_COLUMN_COUNT_MISMATCH=false.
         :param path_to_object:
@@ -77,6 +77,9 @@ class SnowflakeClient:
         :param file_format:
         :return:
         """
+        if not file_format:
+            file_format = self.DEFAULT_FILE_FORMAT
+
         table_name = self._wrap_in_quote(table_name)
         columns = self._wrap_columns_in_quotes(table_columns)
         query = f"""
