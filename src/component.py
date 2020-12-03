@@ -19,6 +19,8 @@ KEY_AWS_REGION = 'aws_region'
 KEY_AWS_S3_BUCKET = 's3_bucket'
 
 KEY_MIN_DATE = 'min_date_since'
+KEY_MAX_DATE = 'max_date'
+KEY_SINCE_LAST = 'since_last'
 
 KEY_REPORT_PATH_PREFIX = 'report_path_prefix'
 
@@ -91,7 +93,10 @@ class Component(KBCEnvHandler):
 
         # last state
         since = params.get(KEY_MIN_DATE) if params.get(KEY_MIN_DATE) else '2000-01-01'
-        start_date, end_date = self.get_date_period_converted(since, 'today')
+        until = params.get(KEY_MAX_DATE) if params.get(KEY_MAX_DATE) else 'now'
+        start_date, end_date = self.get_date_period_converted(since, until)
+
+        until_timestamp = pytz.utc.localize(end_date)
 
         last_file_timestamp = self.last_state.get('last_file_timestamp')
         if last_file_timestamp:
@@ -109,6 +114,11 @@ class Component(KBCEnvHandler):
 
         all_files = self._get_s3_objects(self.bucket, self.report_prefix, last_file_timestamp)
         manifests = self._retrieve_report_manifests(all_files, report_name)
+
+        if params.get(KEY_SINCE_LAST):
+            # get only report in specified period
+            manifests = [m for m in manifests if
+                         manifests[0]['period'].split('-')[0] <= datetime.strftime(until_timestamp, '%Y%m%d')]
 
         # prep the output
         output_table = os.path.join(self.tables_out_path, report_name)
@@ -199,7 +209,7 @@ class Component(KBCEnvHandler):
 
         return start_date, end_date
 
-    def _get_s3_objects(self, bucket, prefix, since=None):
+    def _get_s3_objects(self, bucket, prefix, since=None, until=None):
         if prefix.endswith('*'):
             is_wildcard = True
             prefix = prefix[:-1]
@@ -222,6 +232,8 @@ class Component(KBCEnvHandler):
                 key = obj['Key']
 
                 if since and obj['LastModified'] <= since:
+                    continue
+                if until and obj['LastModified'] > until:
                     continue
 
                 if (is_wildcard and key.startswith(prefix)) or key == prefix:

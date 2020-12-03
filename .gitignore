@@ -10,3 +10,5 @@ test.py
 
 # kbc datafolder
 /data
+
+venv/

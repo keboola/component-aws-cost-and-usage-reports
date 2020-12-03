@@ -4,7 +4,9 @@
   "required": [
     "aws_parameters",
     "report_path_prefix",
-    "min_date_since"
+    "min_date_since",
+    "max_date",
+    "since_last"
   ],
   "properties": {
     "aws_parameters": {
@@ -73,17 +75,34 @@
         }
       }
     },
-    "report_path_prefix": {
-      "propertyOrder": 3,
+    "since_last": {
+       "propertyOrder": 3,
+      "type": "boolean",
+      "format": "checkbox",
+      "title": "New files only.",
+      "default": true,
+      "description": "Download only new reports since last run. The Maximum date parameter is ignored."
+
+    },
+
+    "min_date_since": {
+      "propertyOrder": 5,
+      "type": "string",
+      "title": "Minimum date since",
+      "description": "Lowest report date to download. When New files only is checked, this applies only on first run, reset the state to backfill. Date in YYYY-MM-DD format or dateparser string i.e. 5 days ago, 1 month ago, yesterday, etc. If left empty, all records are downloaded."
+    },
+    "max_date": {
+      "propertyOrder": 7,
+      "type": "string",
+      "title": "Maximum date",
+      "default": "now",
+      "description": "Max report date to download. Date in YYYY-MM-DD format or dateparser string i.e. 5 days ago, 1 month ago, yesterday, etc. If left empty, all records are downloaded."
+    },
+        "report_path_prefix": {
+      "propertyOrder": 10,
       "type": "string",
       "title": "Report prefix",
       "description": "The prefix as you set up in the AWS CUR config. In S3 bucket this is path to your report. E.g. my-report or some/long/prefix/myreport"
-    },
-    "min_date_since": {
-      "propertyOrder": 3,
-      "type": "string",
-      "title": "Minimum date since",
-      "description": "Lowest report date to download. Applies only on first run, reset the state to backfill. Date in YYYY-MM-DD format or dateparser string i.e. 5 days ago, 1 month ago, yesterday, etc. If left empty, all records are downloaded."
     }
   }
 }
