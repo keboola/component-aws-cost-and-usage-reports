@@ -99,7 +99,7 @@ class Component(KBCEnvHandler):
         until_timestamp = pytz.utc.localize(end_date)
 
         last_file_timestamp = self.last_state.get('last_file_timestamp')
-        if last_file_timestamp:
+        if last_file_timestamp and params.get(KEY_SINCE_LAST):
             last_file_timestamp = datetime.fromisoformat(last_file_timestamp)
         else:
             last_file_timestamp = start_date
@@ -115,7 +115,7 @@ class Component(KBCEnvHandler):
         all_files = self._get_s3_objects(self.bucket, self.report_prefix, last_file_timestamp)
         manifests = self._retrieve_report_manifests(all_files, report_name)
 
-        if params.get(KEY_SINCE_LAST):
+        if not params.get(KEY_SINCE_LAST):
             # get only report in specified period
             manifests = [m for m in manifests if
                          manifests[0]['period'].split('-')[0] <= datetime.strftime(until_timestamp, '%Y%m%d')]
