@@ -118,7 +118,9 @@ class Component(KBCEnvHandler):
         if not params.get(KEY_SINCE_LAST):
             # get only report in specified period
             manifests = [m for m in manifests if
-                         manifests[0]['period'].split('-')[0] <= datetime.strftime(until_timestamp, '%Y%m%d')]
+                         datetime.strftime(until_timestamp, '%Y%m%d') >=
+                         m['period'].split('-')[0] >= datetime.strftime(last_file_timestamp, '%Y%m%d')
+                         ]
 
         # prep the output
         output_table = os.path.join(self.tables_out_path, report_name)
