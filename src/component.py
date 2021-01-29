@@ -275,6 +275,7 @@ class Component(KBCEnvHandler):
         for h in header:
             new_h = h.replace('/', '__')
             new_h = new_h.replace(':', '_')
+            new_h = new_h.replace(' ', '_')
             normalized.append(new_h)
         return normalized
 
