@@ -1,12 +1,14 @@
-import boto3
 import json
 import logging
 import os
-import pytz
+import re
 import sys
 from datetime import datetime
-from kbc.env_handler import KBCEnvHandler
 from pathlib import Path
+
+import boto3
+import pytz
+from kbc.env_handler import KBCEnvHandler
 
 from woskpace_client import SnowflakeClient
 
@@ -273,9 +275,7 @@ class Component(KBCEnvHandler):
         normalized = []
 
         for h in header:
-            new_h = h.replace('/', '__')
-            new_h = new_h.replace(':', '_')
-            new_h = new_h.replace(' ', '_')
+            new_h = re.sub("[^a-zA-Z\\d_]", "_", h)
             normalized.append(new_h)
         return normalized
 
