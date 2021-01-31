@@ -275,9 +275,23 @@ class Component(KBCEnvHandler):
         normalized = []
 
         for h in header:
-            new_h = re.sub("[^a-zA-Z\\d_]", "_", h)
+            new_h = h.replace('/', '__')
+            new_h = re.sub("[^a-zA-Z\\d_]", "_", new_h)
+            new_h = self._dedupe_header(new_h)
             normalized.append(new_h)
         return normalized
+
+    def _dedupe_header(self, header, index_separator='_'):
+        new_header = list()
+        dup_cols = dict()
+        for c in header:
+            if c in new_header:
+                new_index = dup_cols.get(c, 0) + 1
+                new_header.append(c + index_separator + str(new_index))
+                dup_cols[c] = new_index
+            else:
+                new_header.append(c)
+        return new_header
 
     # TODO: support for datatypes
     def _create_result_table(self, report_name, max_header):
