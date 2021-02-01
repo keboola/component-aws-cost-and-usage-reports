@@ -69,7 +69,7 @@ The output schema is described [here](https://docs.aws.amazon.com/cur/latest/use
 - Any characters that are not alphanumeric or `_` underscores are replaced by underscore. 
 E.g. `resourceTags/user:owner` is converted to `resourceTags__user_owner`
 - The KBC Storage is case insesitive so the above may lead to duplicate names. In such case the names are deduplicated by adding an index. 
-e.g `resourceTags/user:name` and `resourceTags/user:Name` lead to `resourceTags__user_Name` and `resourcetags__user_name1` 
+e.g `resourceTags/user:name` and `resourceTags/user:Name` lead to `resourceTags__user_Name` and `resourcetags__user_name_1` 
 columns respectively
 
 **Note** That the output schema changes often and may be also affected by the tags and custom columns you define.
