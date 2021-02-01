@@ -261,7 +261,7 @@ class Component(KBCEnvHandler):
             norm_cols = set(self._get_manifest_normalized_columns(m))
             if not norm_cols.issubset(set(self.last_header)):
                 norm_cols.update(set(self.last_header))
-                self.last_header = list(norm_cols)
+                self.last_header = self._dedupe_header(list(norm_cols))
                 self.last_header.sort()
 
         return self.last_header
@@ -277,19 +277,20 @@ class Component(KBCEnvHandler):
         for h in header:
             new_h = h.replace('/', '__')
             new_h = re.sub("[^a-zA-Z\\d_]", "_", new_h)
-            new_h = self._dedupe_header(new_h)
             normalized.append(new_h)
         return normalized
 
     def _dedupe_header(self, header, index_separator='_'):
         new_header = list()
+        new_header_lower = list()
         dup_cols = dict()
         for c in header:
-            if c in new_header:
-                new_index = dup_cols.get(c, 0) + 1
+            if c.lower() in new_header_lower:
+                new_index = dup_cols.get(c.lower(), 0) + 1
                 new_header.append(c + index_separator + str(new_index))
-                dup_cols[c] = new_index
+                dup_cols[c.lower()] = new_index
             else:
+                new_header_lower.append(c.lower())
                 new_header.append(c)
         return new_header
 
