@@ -261,7 +261,7 @@ class Component(KBCEnvHandler):
             norm_cols = set(self._get_manifest_normalized_columns(m))
             if not norm_cols.issubset(set(self.last_header)):
                 norm_cols.update(set(self.last_header))
-                self.last_header = self._dedupe_header(list(norm_cols))
+                self.last_header = list(norm_cols)
                 self.last_header.sort()
 
         return self.last_header
@@ -269,7 +269,8 @@ class Component(KBCEnvHandler):
     def _get_manifest_normalized_columns(self, manifest):
         # normalize
         man_cols = [col['category'] + '/' + col['name'] for col in manifest['columns']]
-        return self._kbc_normalize_header(man_cols)
+        man_cols = self._kbc_normalize_header(man_cols)
+        return self._dedupe_header(man_cols)
 
     def _kbc_normalize_header(self, header):
         normalized = []
