@@ -75,16 +75,52 @@
         }
       }
     },
+    "loading_options": {
+      "type": "object",
+      "title": "Loading Options",
+      "propertyOrder": 2,
+      "format": "grid",
+      "required": [
+        "incremental_output",
+        "pkey"
+      ],
+      "properties": {
+        "pkey": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "title": "col name"
+          },
+          "title": "Primary key",
+          "propertyOrder": 5000
+        },
+        "incremental_output": {
+          "type": "number",
+          "enum": [
+            0,
+            1
+          ],
+          "options": {
+            "enum_titles": [
+              "Full Load",
+              "Incremental Update"
+            ]
+          },
+          "default": 0,
+          "title": "Load type",
+          "description": "If set to Incremental update, the result tables will be updated based on primary key. Full load overwrites the destination table each time. NOTE: If you wish to remove deleted records, this needs to be set to Full load and the Period from attribute empty.",
+          "propertyOrder": 450
+        }
+      }
+    },
     "since_last": {
-       "propertyOrder": 3,
+      "propertyOrder": 3,
       "type": "boolean",
       "format": "checkbox",
       "title": "New files only.",
       "default": true,
       "description": "Download only new reports since last run. The Maximum date parameter is ignored."
-
     },
-
     "min_date_since": {
       "propertyOrder": 5,
       "type": "string",
@@ -98,7 +134,7 @@
       "default": "now",
       "description": "Max report date to download. Date in YYYY-MM-DD format or dateparser string i.e. 5 days ago, 1 month ago, yesterday, etc. If left empty, all records are downloaded."
     },
-        "report_path_prefix": {
+    "report_path_prefix": {
       "propertyOrder": 10,
       "type": "string",
       "title": "Report prefix",
