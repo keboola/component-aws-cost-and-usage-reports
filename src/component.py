@@ -20,6 +20,10 @@ KEY_AWS_API_KEY_SECRET = '#api_key_secret'
 KEY_AWS_REGION = 'aws_region'
 KEY_AWS_S3_BUCKET = 's3_bucket'
 
+KEY_LOADING_OPTIONS = 'loading_options'
+KEY_LOADING_OPTIONS_PKEY = 'pkey'
+KEY_LOADING_OPTIONS_INCREMENTAL_OUTPUT = 'incremental_output'
+
 KEY_MIN_DATE = 'min_date_since'
 KEY_MAX_DATE = 'max_date'
 KEY_SINCE_LAST = 'since_last'
@@ -151,13 +155,22 @@ class Component(KBCEnvHandler):
 
         # finalize
         self.snowflake_client.close()
-        self.configuration.write_table_manifest(output_table,
-                                                columns=self.last_header)
+
+        self._write_table_manifest(output_table)
         self.write_state_file({"last_file_timestamp": latest_timestamp.isoformat(),
                                "last_report_id": latest_report_id,
                                "report_header": self.last_header})
 
         logging.info(f"Extraction finished at {datetime.now().isoformat()}.")
+
+    def _write_table_manifest(self, output_table):
+        loading_options = self.cfg_params.get(KEY_LOADING_OPTIONS, {})
+        incremental = bool(loading_options.get(KEY_LOADING_OPTIONS_INCREMENTAL_OUTPUT, False))
+        pkey = loading_options.get(KEY_LOADING_OPTIONS_PKEY, [])
+        self.configuration.write_table_manifest(output_table,
+                                                columns=self.last_header,
+                                                primary_key=pkey,
+                                                incremental=incremental)
 
     def _retrieve_report_manifests(self, all_files, report_name):
         manifests = []
