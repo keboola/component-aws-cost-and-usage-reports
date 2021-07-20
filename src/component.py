@@ -125,7 +125,7 @@ class Component(KBCEnvHandler):
             # get only report in specified period
             manifests = [m for m in manifests if
                          datetime.strftime(until_timestamp, '%Y%m%d') >=
-                         m['period'].split('-')[0] >= datetime.strftime(last_file_timestamp, '%Y%m%d')
+                         m['billingPeriod']['start'].split('T')[0] >= datetime.strftime(last_file_timestamp, '%Y%m%d')
                          ]
 
         # prep the output
