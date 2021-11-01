@@ -144,29 +144,31 @@ class Component(KBCEnvHandler):
         max_header = self._get_max_header_normalized(manifests)
         # create result table
         self.snowflake_client.open_connection()
-        self._create_result_table(report_name, max_header)
+        try:
+            self._create_result_table(report_name, max_header)
 
-        for man in manifests:
-            # just in case
-            if man['last_modified'] < last_file_timestamp or man['assemblyId'] == self.last_report_id:
-                logging.warning(f"Report ID {man['assemblyId']} already downloaded, skipping.")
-                continue
+            for man in manifests:
+                # just in case
+                if man['last_modified'] < last_file_timestamp or man['assemblyId'] == self.last_report_id:
+                    logging.warning(f"Report ID {man['assemblyId']} already downloaded, skipping.")
+                    continue
 
-            if last_file_timestamp < man['last_modified']:
-                latest_timestamp = man['last_modified']
-                latest_report_id = man['assemblyId']
+                if last_file_timestamp < man['last_modified']:
+                    latest_timestamp = man['last_modified']
+                    latest_report_id = man['assemblyId']
 
-            self._upload_report_chunks_to_workspace(man, report_name)
+                self._upload_report_chunks_to_workspace(man, report_name)
 
-        # finalize
-        self.snowflake_client.close()
+            self._write_table_manifest(output_table)
+            self.write_state_file({"last_file_timestamp": latest_timestamp.isoformat(),
+                                   "last_report_id": latest_report_id,
+                                   "report_header": self.last_header})
 
-        self._write_table_manifest(output_table)
-        self.write_state_file({"last_file_timestamp": latest_timestamp.isoformat(),
-                               "last_report_id": latest_report_id,
-                               "report_header": self.last_header})
-
-        logging.info(f"Extraction finished at {datetime.now().isoformat()}.")
+            logging.info(f"Extraction finished at {datetime.now().isoformat()}.")
+        except Exception as e:
+            raise e
+        finally:
+            self.snowflake_client.close()
 
     def _write_table_manifest(self, output_table):
         loading_options = self.cfg_params.get(KEY_LOADING_OPTIONS, {})
