@@ -132,8 +132,13 @@ class Component(KBCEnvHandler):
         output_table = os.path.join(self.tables_out_path, report_name)
 
         # download report files
-
-        logging.info(f"{len(manifests)} recent reports found. Downloading...")
+        reports_found = len(manifests)
+        if reports_found > 0:
+            logging.info(f"{len(manifests)} recent reports found. Downloading...")
+        else:
+            logging.warning(
+                "No reports found for the specified period. If there are some available check the prefix setting.")
+            exit(0)
 
         # get max header
         max_header = self._get_max_header_normalized(manifests)
