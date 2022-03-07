@@ -1,14 +1,13 @@
+import boto3
 import json
 import logging
 import os
+import pytz
 import re
 import sys
 from datetime import datetime
-from pathlib import Path
-
-import boto3
-import pytz
 from kbc.env_handler import KBCEnvHandler
+from pathlib import Path
 
 from woskpace_client import SnowflakeClient
 
@@ -104,28 +103,28 @@ class Component(KBCEnvHandler):
 
         until_timestamp = pytz.utc.localize(end_date)
 
+        incremental_fetch = params.get(KEY_SINCE_LAST)
+
         last_file_timestamp = self.last_state.get('last_file_timestamp')
-        if last_file_timestamp and params.get(KEY_SINCE_LAST):
-            last_file_timestamp = datetime.fromisoformat(last_file_timestamp)
+        if last_file_timestamp and incremental_fetch:
+            since_timestamp = datetime.fromisoformat(last_file_timestamp)
         else:
-            last_file_timestamp = start_date
-            last_file_timestamp = pytz.utc.localize(last_file_timestamp)
+            since_timestamp = pytz.utc.localize(start_date)
 
         report_name = self.report_prefix.split('/')[-1].replace('*', '')
 
-        latest_timestamp = last_file_timestamp
         latest_report_id = self.last_report_id
 
-        logging.info(f"Collecting recent files for report '{report_name}', since {last_file_timestamp}")
+        logging.info(f"Collecting recent files for report '{report_name}', since {since_timestamp}")
 
-        all_files = self._get_s3_objects(self.bucket, self.report_prefix, last_file_timestamp)
+        all_files = self._get_s3_objects(self.bucket, self.report_prefix, since_timestamp)
         manifests = self._retrieve_report_manifests(all_files, report_name)
 
-        if not params.get(KEY_SINCE_LAST):
+        if not incremental_fetch:
             # get only report in specified period
             manifests = [m for m in manifests if
                          datetime.strftime(until_timestamp, '%Y%m%d') >=
-                         m['billingPeriod']['start'].split('T')[0] >= datetime.strftime(last_file_timestamp, '%Y%m%d')
+                         m['billingPeriod']['start'].split('T')[0] >= datetime.strftime(since_timestamp, '%Y%m%d')
                          ]
 
         # prep the output
@@ -149,18 +148,19 @@ class Component(KBCEnvHandler):
 
             for man in manifests:
                 # just in case
-                if man['last_modified'] < last_file_timestamp or man['assemblyId'] == self.last_report_id:
+                if man['last_modified'] < since_timestamp or \
+                        (incremental_fetch and man['assemblyId'] == self.last_report_id):
                     logging.warning(f"Report ID {man['assemblyId']} already downloaded, skipping.")
                     continue
 
-                if last_file_timestamp < man['last_modified']:
-                    latest_timestamp = man['last_modified']
+                if since_timestamp < man['last_modified']:
+                    since_timestamp = man['last_modified']
                     latest_report_id = man['assemblyId']
 
                 self._upload_report_chunks_to_workspace(man, report_name)
 
             self._write_table_manifest(output_table)
-            self.write_state_file({"last_file_timestamp": latest_timestamp.isoformat(),
+            self.write_state_file({"last_file_timestamp": since_timestamp.isoformat(),
                                    "last_report_id": latest_report_id,
                                    "report_header": self.last_header})
 
