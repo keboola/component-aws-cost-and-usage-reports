@@ -99,6 +99,7 @@ class Component(KBCEnvHandler):
         # last state
         since = params.get(KEY_MIN_DATE) if params.get(KEY_MIN_DATE) else '2000-01-01'
         until = params.get(KEY_MAX_DATE) if params.get(KEY_MAX_DATE) else 'now'
+        logging.info(f"{since} {until}")
         start_date, end_date = self.get_date_period_converted(since, until)
 
         until_timestamp = pytz.utc.localize(end_date)
@@ -253,6 +254,7 @@ class Component(KBCEnvHandler):
         for page in pages:
 
             for obj in page.get('Contents', []):
+                logging.info(f"Found object {obj}")
                 key = obj['Key']
 
                 if since and obj['LastModified'] <= since:
