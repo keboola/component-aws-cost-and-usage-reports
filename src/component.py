@@ -241,7 +241,6 @@ class Component(KBCEnvHandler):
             prefix = prefix[:-1]
         else:
             is_wildcard = False
-        logging.info(self.s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix))
         paginator = self.s3_client.get_paginator('list_objects_v2')
         params = dict(Bucket=bucket,
                       Prefix=prefix,
@@ -255,7 +254,6 @@ class Component(KBCEnvHandler):
         for page in pages:
 
             for obj in page.get('Contents', []):
-                logging.info(f"Found object {obj}")
                 key = obj['Key']
 
                 if since and obj['LastModified'] <= since:
@@ -272,9 +270,6 @@ class Component(KBCEnvHandler):
         if self.report_prefix.endswith('/'):
             self.report_prefix = self.report_prefix[:-1]
 
-        # prepend / in case the path is not with // syntax
-        # if not self.report_prefix.startswith('/') and '//' not in self.report_prefix:
-        #     self.report_prefix = '/' + self.report_prefix
         if not self.report_prefix.endswith('*'):
             self.report_prefix = self.report_prefix + '*'
 
