@@ -1,13 +1,14 @@
-import boto3
 import json
 import logging
 import os
-import pytz
 import re
 import sys
 from datetime import datetime
-from kbc.env_handler import KBCEnvHandler
 from pathlib import Path
+
+import boto3
+import pytz
+from kbc.env_handler import KBCEnvHandler
 
 from woskpace_client import SnowflakeClient
 
@@ -240,7 +241,7 @@ class Component(KBCEnvHandler):
             prefix = prefix[:-1]
         else:
             is_wildcard = False
-
+        logging.info(self.s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix))
         paginator = self.s3_client.get_paginator('list_objects_v2')
         params = dict(Bucket=bucket,
                       Prefix=prefix,
