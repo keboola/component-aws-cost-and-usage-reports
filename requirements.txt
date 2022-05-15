@@ -7,3 +7,4 @@ snowflake-connector-python
 snowflake-sqlalchemy
 dateparser==1.0.0
 pytz==2020.4
+regex==2022.3.2

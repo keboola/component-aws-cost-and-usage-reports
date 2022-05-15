@@ -1,13 +1,14 @@
-import boto3
 import json
 import logging
 import os
-import pytz
 import re
 import sys
 from datetime import datetime
-from kbc.env_handler import KBCEnvHandler
 from pathlib import Path
+
+import boto3
+import pytz
+from kbc.env_handler import KBCEnvHandler
 
 from woskpace_client import SnowflakeClient
 
@@ -99,6 +100,7 @@ class Component(KBCEnvHandler):
         # last state
         since = params.get(KEY_MIN_DATE) if params.get(KEY_MIN_DATE) else '2000-01-01'
         until = params.get(KEY_MAX_DATE) if params.get(KEY_MAX_DATE) else 'now'
+        logging.info(f"{since} {until}")
         start_date, end_date = self.get_date_period_converted(since, until)
 
         until_timestamp = pytz.utc.localize(end_date)
@@ -239,7 +241,6 @@ class Component(KBCEnvHandler):
             prefix = prefix[:-1]
         else:
             is_wildcard = False
-
         paginator = self.s3_client.get_paginator('list_objects_v2')
         params = dict(Bucket=bucket,
                       Prefix=prefix,
@@ -269,9 +270,6 @@ class Component(KBCEnvHandler):
         if self.report_prefix.endswith('/'):
             self.report_prefix = self.report_prefix[:-1]
 
-        # prepend / in case the path is not with // syntax
-        if not self.report_prefix.startswith('/') and '//' not in self.report_prefix:
-            self.report_prefix = '/' + self.report_prefix
         if not self.report_prefix.endswith('*'):
             self.report_prefix = self.report_prefix + '*'
 
