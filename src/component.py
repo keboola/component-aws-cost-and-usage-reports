@@ -150,8 +150,7 @@ class Component(KBCEnvHandler):
 
             for man in manifests:
                 # just in case
-                if man['last_modified'] < since_timestamp or \
-                        (incremental_fetch and man['assemblyId'] == self.last_report_id):
+                if incremental_fetch and man['assemblyId'] == self.last_report_id:
                     logging.warning(f"Report ID {man['assemblyId']} already downloaded, skipping.")
                     continue
 
