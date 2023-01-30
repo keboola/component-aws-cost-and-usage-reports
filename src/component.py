@@ -139,6 +139,7 @@ class Component(KBCEnvHandler):
         else:
             logging.warning(
                 "No reports found for the specified period. If there are some available check the prefix setting.")
+            self.write_state_file(self.last_state)
             exit(0)
 
         # get max header
