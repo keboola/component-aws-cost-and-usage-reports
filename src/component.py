@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 
 import boto3
+from botocore.exceptions import ClientError
+
 import pytz
 from kbc.env_handler import KBCEnvHandler
 
@@ -54,7 +56,8 @@ class Component(KBCEnvHandler):
         if debug:
             logging.getLogger().setLevel(logging.DEBUG)
         else:
-            logging.getLogger('snowflake.connector').setLevel(logging.WARNING)  # avoid detail logs from the library
+            logging.getLogger('snowflake.connector').setLevel(
+                logging.WARNING)  # avoid detail logs from the library
         logging.info('Loading configuration...')
 
         try:
@@ -64,6 +67,7 @@ class Component(KBCEnvHandler):
         except ValueError as e:
             logging.exception(e)
             exit(1)
+
         self.bucket = self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_S3_BUCKET]
         self.report_prefix = self.cfg_params[KEY_REPORT_PATH_PREFIX]
         self._cleanup_report_prefix()
@@ -73,7 +77,8 @@ class Component(KBCEnvHandler):
                                       aws_access_key_id=self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_ID],
                                       aws_secret_access_key=self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_SECRET])
 
-        snfk_authorisation = self.configuration.get_authorization()['workspace']
+        snfk_authorisation = self.configuration.get_authorization()[
+            'workspace']
         params = self.cfg_params  # noqa
         snfwlk_credentials = {
             "account": snfk_authorisation['host'].replace('.snowflakecomputing.com', ''),
@@ -98,7 +103,8 @@ class Component(KBCEnvHandler):
         params = self.cfg_params  # noqa
 
         # last state
-        since = params.get(KEY_MIN_DATE) if params.get(KEY_MIN_DATE) else '2000-01-01'
+        since = params.get(KEY_MIN_DATE) if params.get(
+            KEY_MIN_DATE) else '2000-01-01'
         until = params.get(KEY_MAX_DATE) if params.get(KEY_MAX_DATE) else 'now'
         logging.info(f"{since} {until}")
         start_date, end_date = self.get_date_period_converted(since, until)
@@ -117,16 +123,19 @@ class Component(KBCEnvHandler):
 
         latest_report_id = self.last_report_id
 
-        logging.info(f"Collecting recent files for report '{report_name}', since {since_timestamp}")
+        logging.info(
+            f"Collecting recent files for report '{report_name}', since {since_timestamp}")
 
-        all_files = self._get_s3_objects(self.bucket, self.report_prefix, since_timestamp)
+        all_files = self._get_s3_objects(
+            self.bucket, self.report_prefix, since_timestamp)
         manifests = self._retrieve_report_manifests(all_files, report_name)
 
         if not incremental_fetch:
             # get only report in specified period
             manifests = [m for m in manifests if
                          datetime.strftime(until_timestamp, '%Y%m%d') >=
-                         m['billingPeriod']['start'].split('T')[0] >= datetime.strftime(since_timestamp, '%Y%m%d')
+                         m['billingPeriod']['start'].split(
+                             'T')[0] >= datetime.strftime(since_timestamp, '%Y%m%d')
                          ]
 
         # prep the output
@@ -135,7 +144,8 @@ class Component(KBCEnvHandler):
         # download report files
         reports_found = len(manifests)
         if reports_found > 0:
-            logging.info(f"{len(manifests)} recent reports found. Downloading...")
+            logging.info(
+                f"{len(manifests)} recent reports found. Downloading...")
         else:
             logging.warning(
                 "No reports found for the specified period. If there are some available check the prefix setting.")
@@ -152,7 +162,8 @@ class Component(KBCEnvHandler):
             for man in manifests:
                 # just in case
                 if incremental_fetch and man['assemblyId'] == self.last_report_id:
-                    logging.warning(f"Report ID {man['assemblyId']} already downloaded, skipping.")
+                    logging.warning(
+                        f"Report ID {man['assemblyId']} already downloaded, skipping.")
                     continue
 
                 if since_timestamp < man['last_modified']:
@@ -166,7 +177,8 @@ class Component(KBCEnvHandler):
                                    "last_report_id": latest_report_id,
                                    "report_header": self.last_header})
 
-            logging.info(f"Extraction finished at {datetime.now().isoformat()}.")
+            logging.info(
+                f"Extraction finished at {datetime.now().isoformat()}.")
         except Exception as e:
             raise e
         finally:
@@ -174,7 +186,8 @@ class Component(KBCEnvHandler):
 
     def _write_table_manifest(self, output_table):
         loading_options = self.cfg_params.get(KEY_LOADING_OPTIONS, {})
-        incremental = bool(loading_options.get(KEY_LOADING_OPTIONS_INCREMENTAL_OUTPUT, False))
+        incremental = bool(loading_options.get(
+            KEY_LOADING_OPTIONS_INCREMENTAL_OUTPUT, False))
         pkey = loading_options.get(KEY_LOADING_OPTIONS_PKEY, [])
         self.configuration.write_table_manifest(output_table,
                                                 columns=self.last_header,
@@ -186,14 +199,16 @@ class Component(KBCEnvHandler):
         for obj in all_files:
             object_name = obj['Key'].split('/')[-1]
             parent_folder_name = obj['Key'].split('/')[-2]
-            start_date, end_date = self._try_to_parse_report_period(parent_folder_name)
+            start_date, end_date = self._try_to_parse_report_period(
+                parent_folder_name)
             # get only root (period) manifests
             manifest_file_name = f"{report_name}-Manifest.json"
             if start_date and object_name == manifest_file_name:
                 # download file content
                 manifest = json.loads(self._read_s3_file_contents(obj['Key']))
                 manifest['last_modified'] = obj['LastModified']
-                manifest['report_folder'] = obj['Key'].replace(f'/{manifest_file_name}', '')
+                manifest['report_folder'] = obj['Key'].replace(
+                    f'/{manifest_file_name}', '')
                 manifest['period'] = parent_folder_name
                 manifests.append(manifest)
         return manifests
@@ -219,8 +234,18 @@ class Component(KBCEnvHandler):
                                                               self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_SECRET])
 
     def _read_s3_file_contents(self, key):
-        response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
-        return response['Body'].read()
+        try:
+            response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
+            return response['Body'].read()
+        except ClientError as error:
+            if error.response['Error']['Code'] == 'NoSuchKey':
+                logging.exception("The specified object was not found.")
+            elif error.response['Error']['Code'] == 'AccessDenied':
+                logging.exception(
+                    "Permission to access the object from S3 is missing.")
+            else:
+                logging.exception(str(error))
+            raise
 
     def _try_to_parse_report_period(self, folder_name):
         periods = folder_name.split('-')
@@ -241,7 +266,12 @@ class Component(KBCEnvHandler):
             prefix = prefix[:-1]
         else:
             is_wildcard = False
-        paginator = self.s3_client.get_paginator('list_objects_v2')
+        try:
+            paginator = self.s3_client.get_paginator('list_objects_v2')
+        except ClientError as error:
+            logging.error(f"Error occurred while listing S3 objects: {error}")
+            raise
+
         params = dict(Bucket=bucket,
                       Prefix=prefix,
                       PaginationConfig={
@@ -286,7 +316,8 @@ class Component(KBCEnvHandler):
 
     def _get_manifest_normalized_columns(self, manifest):
         # normalize
-        man_cols = [col['category'] + '/' + col['name'] for col in manifest['columns']]
+        man_cols = [col['category'] + '/' + col['name']
+                    for col in manifest['columns']]
         man_cols = self._kbc_normalize_header(man_cols)
         return self._dedupe_header(man_cols)
 
