@@ -92,6 +92,49 @@ class SnowflakeClient:
         query += ");"
         self.execute_query(query)
 
+    def create_temp_stage(self, name: str, file_format: dict = None):
+        if not file_format:
+            file_format = self.DEFAULT_FILE_FORMAT
+        query = f"""
+            CREATE OR REPLACE TEMP STAGE  {name}
+            """
+
+        query += " FILE_FORMAT = ("
+        for key in file_format:
+            query += f"{key}={file_format[key]} "
+        query += ");"
+
+        self.execute_query(query)
+
+    def copy_csv_into_table_from_file(self, table_name: str, table_columns: list[str], csv_file_path: str,
+                                      file_format: dict = None):
+        """
+        Import from file by default CSV format with skip header setup and ERROR_ON_COLUMN_COUNT_MISMATCH=false.
+
+        Args:
+            table_name:
+            table_columns:
+            csv_file_path:
+            file_format:
+        """
+        if not file_format:
+            file_format = self.DEFAULT_FILE_FORMAT
+        table_name = self._wrap_in_quote(table_name)
+        # create temp stage
+        self.create_temp_stage(table_name, file_format)
+        # copy to stage
+        stage_sql = f"PUT file://{csv_file_path} @{table_name} AUTO_COMPRESS=TRUE;"
+        self.execute_query(stage_sql)
+
+        # insert data
+        columns = self._wrap_columns_in_quotes(table_columns)
+        query = f"COPY INTO {table_name} ({', '.join(columns)}) FROM @{table_name}"
+        query += " FILE_FORMAT = ("
+        for key in file_format:
+            query += f"{key}={file_format[key]} "
+        query += ");"
+        self.execute_query(query)
+
     def _wrap_columns_in_quotes(self, columns):
         return [self._wrap_in_quote(col) for col in columns]
 

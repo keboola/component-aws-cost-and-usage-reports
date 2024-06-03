@@ -3,13 +3,14 @@ import logging
 import os
 import re
 import sys
+import tempfile
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
 import boto3
-from botocore.exceptions import ClientError
-
 import pytz
+from botocore.exceptions import ClientError
 from kbc.env_handler import KBCEnvHandler
 
 from woskpace_client import SnowflakeClient
@@ -213,11 +214,35 @@ class Component(KBCEnvHandler):
                 manifests.append(manifest)
         return manifests
 
+    def _download_and_unzip(self, key: str, local_path) -> str:
+        """
+        Download ZIP file from S3, unzip
+        Args:
+            key:
+            local_path:
+
+        Returns:
+
+        """
+        self.s3_client.download_file(self.bucket, key, local_path)
+        temp_dir = tempfile.mkdtemp(suffix='_report.zip')
+
+        # unzip
+        with zipfile.ZipFile(local_path, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
+        # get all files in temp dir
+        files = os.listdir(temp_dir)
+        return os.path.join(temp_dir, files[0])
+
     def _upload_report_chunks_to_workspace(self, manifest, table_name):
         logging.info(
             f"Uploading report ID {manifest['assemblyId']} for period {manifest['period']}"
             f" in {len(manifest['reportKeys'])} report chunks.")
         columns = self._get_manifest_normalized_columns(manifest)
+        is_zip = True if manifest['reportKeys'] and manifest['reportKeys'][0].endswith('zip') else False
+        if is_zip:
+            logging.info("Processing zip file via local stage")
+
         for key in manifest['reportKeys']:
             # support for // syntax
             key_split = key.split('/')
@@ -226,12 +251,20 @@ class Component(KBCEnvHandler):
 
             # download
             s3_path = f's3://{self.bucket}/{key}'
+
             logging.info(f"Uploading chunk {key_split[-1]}")
-            self.snowflake_client.copy_csv_into_table_from_s3(table_name,
-                                                              columns,
-                                                              s3_path,
-                                                              self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_ID],
-                                                              self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_SECRET])
+            if s3_path.endswith('.zip'):
+                # download zip
+                res_gz = self._download_and_unzip(key, f'/tmp/{key_split[-1]}.zip')
+
+                self.snowflake_client.copy_csv_into_table_from_file(table_name, columns, res_gz)
+            else:
+                self.snowflake_client.copy_csv_into_table_from_s3(table_name,
+                                                                  columns,
+                                                                  s3_path,
+                                                                  self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_ID],
+                                                                  self.cfg_params[KEY_AWS_PARAMS][
+                                                                      KEY_AWS_API_KEY_SECRET])
 
     def _read_s3_file_contents(self, key):
         try:
