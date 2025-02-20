@@ -1,5 +1,5 @@
 https://bitbucket.org/kds_consulting_team/keboola-python-util-lib/get/0.4.4.zip#egg=kbc
-requests===2.23.0
+requests===2.32.2
 mock
 freezegun
 boto3===1.15.9
