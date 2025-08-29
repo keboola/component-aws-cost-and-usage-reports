@@ -2,16 +2,7 @@
   "storage": {
     "input": {
       "files": [],
-      "tables": [
-        {
-          "source": "in.c-test.test",
-          "destination": "test.csv",
-          "limit": 50,
-          "columns": [],
-          "where_values": [],
-          "where_operator": "eq"
-        }
-      ]
+      "tables": []
     },
     "output": {
       "files": [],
@@ -19,35 +10,22 @@
     }
   },
   "parameters": {
-    "#api_token": "demo",
-    "period_from": "yesterday",
-    "endpoints": [
-      "deals",
-      "companies"
-    ],
-    "company_properties": "",
-    "deal_properties": "",
-    "debug": true
+    "aws_parameters": {
+      "api_key_id": "YOUR_AWS_ACCESS_KEY_ID",
+      "#api_key_secret": "YOUR_AWS_SECRET_ACCESS_KEY", 
+      "s3_bucket": "your-cost-and-usage-reports-bucket",
+      "aws_region": "eu-central-1"
+    },
+    "report_path_prefix": "your-report-name",
+    "min_date_since": "2024-01-01",
+    "max_date": "now", 
+    "since_last": true,
+    "loading_options": {
+      "incremental_output": 0,
+      "pkey": []
+    },
+    "debug": false
   },
-  "image_parameters": {
-    "syrup_url": "https://syrup.keboola.com/"
-  },
-  "authorization": {
-    "oauth_api": {
-      "id": "OAUTH_API_ID",
-      "credentials": {
-        "id": "main",
-        "authorizedFor": "Myself",
-        "creator": {
-          "id": "1234",
-          "description": "me@keboola.com"
-        },
-        "created": "2016-01-31 00:13:30",
-        "#data": "{\"refresh_token\":\"MCWBkfdK9m5YK*Oqahwm6XN6elMAEwcH5kYcK8Ku!bpiOgSDZN9MQIzunpMsh6LyKH0i!7OcwwwajuxPfvm2PrrWYSs*HerDr2ZSJ39pqHJcvwUNIvHdtcgFFr3Em*yhn3GKBwM2p9UrjtgdAriSDny5YgUYGuI3gYJY1ypD*wBaAOzzeeXZx6CdgjruJ7gboTAngbWk3CzO9rORIwXAAlGUH6ZgBQJL3AwkYVMRFV4BvIvDAMF*0DcGDyrcyYDw9X3vYn*Wy!OqgrenKCGowdJk0C0136SUv4PJI383y76UMim6Q7KGDj7Lf!K2N2FDbxsz2iZKZTBr2vHx8pEC1oBc$\"}",
-        "oauthVersion": "2.0",
-        "appKey": "000000004C184A49",
-        "#appSecret": "vBAYak49pVK1zghHAgDH4tCSCNlT-CiN"
-      }
-    }
-  }
+  "image_parameters": {},
+  "authorization": {}
 }
