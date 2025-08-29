@@ -1,9 +1,14 @@
 import logging
+import os
 from typing import List
 
 import duckdb
+from duckdb import DuckDBPyConnection
 
 from configuration import Configuration
+
+# DuckDB temporary directory configuration
+DUCK_DB_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "duckdb")
 
 
 class DuckDBProcessor:
@@ -13,13 +18,37 @@ class DuckDBProcessor:
         self.config = config
         self.con = None
 
+    def _init_connection(
+        self, threads: int = 4, max_memory: int = 1024, db_path: str = ":memory:"
+    ) -> DuckDBPyConnection:
+        """
+        Returns connection to temporary DuckDB database with advanced optimizations.
+        DuckDB supports thread-safe access to a single connection.
+        """
+        os.makedirs(DUCK_DB_DIR, exist_ok=True)
+        # Enhanced configuration with performance optimizations
+        # Using only definitely valid DuckDB configuration parameters
+        config = {
+            # Basic settings
+            "temp_directory": DUCK_DB_DIR,
+            "threads": threads,
+            "max_memory": f"{max_memory}MB",
+            "extension_directory": os.path.join(DUCK_DB_DIR, "extensions"),
+            # Performance optimizations
+            "preserve_insertion_order": False,  # Faster inserts
+        }
+
+        logging.info(f"Initializing DuckDB connection with config: {config}")
+        conn = duckdb.connect(database=db_path, config=config)
+        return conn
+
     def setup_connection(self):
-        """Setup DuckDB connection with S3 credentials."""
+        """Setup DuckDB connection with S3 credentials and performance optimizations."""
         if self.con:
             return  # already setup
 
         logging.info("Setting up DuckDB connection...")
-        self.con = duckdb.connect(database=":memory:")
+        self.con = self._init_connection()
         self.con.execute("INSTALL httpfs;")
         self.con.execute("LOAD httpfs;")
         self.con.execute(f"SET s3_region='{self.config.aws_parameters.aws_region}';")
