@@ -72,7 +72,7 @@ class Component(ComponentBase):
             report_manifests = self._discover_available_reports()
 
             # Step 3: Process the reports and export data
-            output_table = self._process_and_export_reports(report_manifests)
+            output_table = self._process_reports_unified_bulk(report_manifests)
 
             # Step 4: Write table manifest
             self._write_table_manifest(output_table)
@@ -143,14 +143,6 @@ class Component(ComponentBase):
         logging.info(f"{len(report_manifests)} reports found and ready for processing.")
         return report_manifests
 
-    def _process_and_export_reports(self, report_manifests) -> str:
-        """Process report manifests and export the consolidated data."""
-        # Setup DuckDB connection for processing
-        self.duckdb_processor.setup_connection()
-
-        # New unified approach: extract all ZIP files in parallel, then bulk load everything
-        return self._process_reports_unified_bulk(report_manifests)
-
     def _process_reports_unified_bulk(self, report_manifests) -> str:
         """New unified approach: extract all ZIP files in parallel, then bulk load everything."""
         logging.info(
@@ -174,6 +166,9 @@ class Component(ComponentBase):
         self.last_header = final_columns
 
         # Step 4: Bulk load all CSV files into DuckDB
+        # Setup DuckDB connection for processing
+        self.duckdb_processor.setup_connection()
+
         if not self.duckdb_processor.load_csv_files_bulk(all_csv_patterns):
             raise Exception("Failed to load CSV files in bulk")
 
@@ -194,139 +189,6 @@ class Component(ComponentBase):
             f"Successfully processed {len(all_csv_patterns)} files using unified bulk approach"
         )
         return output_path
-
-    def _try_bulk_csv_processing(self, csv_manifests):
-        """Attempt to process CSV files using efficient bulk loading."""
-        logging.info(
-            f"Attempting bulk processing of {len(csv_manifests)} CSV reports..."
-        )
-
-        # Generate S3 patterns for bulk loading
-        s3_patterns = self.aws_manager.get_s3_patterns_from_manifests(csv_manifests)
-
-        # Try bulk loading
-        if not self.duckdb_processor.load_csv_files_bulk(s3_patterns):
-            logging.warning(
-                "Bulk loading failed, falling back to individual processing"
-            )
-            return False
-
-        # Update tracking information
-        self._update_runtime_state_from_manifests(csv_manifests)
-
-        # Process schema and create unified view
-        current_columns = self.duckdb_processor.get_current_columns_from_table()
-        final_columns = self.column_normalizer.normalize_and_merge_columns(
-            current_columns, self.last_header
-        )
-        self.last_header = final_columns
-
-        # Export the data
-        if self.duckdb_processor.create_unified_view(final_columns, current_columns):
-            output_path = os.path.join(self.tables_out_path, f"{self.report_name}.csv")
-            self.duckdb_processor.export_data_to_csv("unified_reports", output_path)
-            return True
-        else:
-            logging.error("Failed to create unified view for bulk export")
-            return False
-
-    def _process_reports_individually(self, manifests) -> str:
-        """Process report files individually (legacy approach for ZIP files or bulk fallback)."""
-        logging.info("Processing reports individually...")
-
-        # Prepare schema from all manifests
-        self.last_header = self.column_normalizer.get_max_header_normalized(
-            manifests, self.last_header
-        )
-
-        # Create result table with fixed schema
-        result_table = f"result_{self.report_name.replace('-', '_')}"
-        self.duckdb_processor.create_result_table(result_table, self.last_header)
-
-        # Process each manifest
-        for manifest in manifests:
-            if (
-                self.config.since_last
-                and manifest["assemblyId"] == self.latest_report_id
-            ):
-                logging.warning(
-                    f"Report ID {manifest['assemblyId']} already processed, skipping."
-                )
-                continue
-
-            # Update tracking
-            if self.since_timestamp < manifest["last_modified"]:
-                self.since_timestamp = manifest["last_modified"]
-                self.latest_report_id = manifest["assemblyId"]
-
-            # Process the report chunks
-            self._append_report_chunks(result_table, manifest)
-
-        # Export the consolidated data
-        output_path = os.path.join(self.tables_out_path, f"{self.report_name}.csv")
-        self.duckdb_processor.export_data_to_csv(result_table, output_path)
-        return output_path
-
-    def _append_report_chunks(self, result_table: str, manifest):
-        """Process and append all chunks from a single report manifest to the result table."""
-        logging.info(
-            f"Processing report ID {manifest['assemblyId']} for period {manifest['period']} "
-            f"with {len(manifest['reportKeys'])} data chunks."
-        )
-
-        # Check if this report contains ZIP files
-        contains_zip_files = self.aws_manager.manifest_contains_zip_files(manifest)
-        if contains_zip_files:
-            logging.info("Report contains ZIP files - using local staging approach")
-
-        # Process each data chunk in the report
-        for chunk_key in manifest["reportKeys"]:
-            self._process_single_chunk(chunk_key, manifest, result_table)
-
-    def _process_single_chunk(self, chunk_key, manifest, result_table):
-        """Process a single report chunk (CSV or ZIP file) and append to result table."""
-        # Handle special path syntax for S3 keys
-        key_parts = chunk_key.split("/")
-        if "//" in manifest["report_folder"]:
-            normalized_key = (
-                f"{manifest['report_folder']}/{key_parts[-2]}/{key_parts[-1]}"
-            )
-        else:
-            normalized_key = chunk_key
-
-        # Determine source path based on file type
-        s3_path = f"s3://{self.aws_manager.bucket}/{normalized_key}"
-
-        if s3_path.endswith(".zip"):
-            # ZIP files need to be downloaded and extracted locally
-            zip_filename = normalized_key.split("/")[-1]
-            local_zip_path = f"/tmp/{zip_filename}.zip"
-            source_path = self.aws_manager.download_and_unzip(
-                normalized_key, local_zip_path
-            )
-        else:
-            # CSV files can be read directly from S3 via DuckDB
-            source_path = s3_path
-
-        # Log progress
-        chunk_filename = normalized_key.split("/")[-1]
-        logging.info(f"Processing chunk: {chunk_filename}")
-
-        # Load chunk data into staging table
-        self.duckdb_processor.load_chunk_into_staging_table(source_path)
-
-        # Get columns from staging table
-        staging_columns = self.duckdb_processor.get_staging_table_columns()
-
-        # Build column mapping
-        column_mapping = self.column_normalizer.build_column_aligned_select(
-            self.last_header, staging_columns
-        )
-
-        # Insert the aligned data
-        self.duckdb_processor.insert_staging_data_to_result(
-            result_table, column_mapping
-        )
 
     def _save_final_state(self):
         """Save the final execution state for future incremental runs."""
