@@ -3,6 +3,7 @@ import logging
 import os
 import tempfile
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import List, Dict, Any
 
@@ -162,6 +163,74 @@ class AWSReportManager:
                 pattern = f"s3://{self.bucket}/{base_path}/*.csv"
                 patterns.append(pattern)
         return patterns
+
+    def prepare_all_csv_patterns(self, manifests: List[Dict]) -> List[str]:
+        """Prepare all CSV patterns by extracting ZIP files and getting S3 patterns."""
+        csv_patterns = []
+
+        # Get direct CSV patterns
+        csv_manifests = [
+            m for m in manifests if not self.manifest_contains_zip_files(m)
+        ]
+        csv_patterns.extend(self.get_s3_patterns_from_manifests(csv_manifests))
+
+        # Extract ZIP files and get local CSV patterns
+        zip_manifests = [m for m in manifests if self.manifest_contains_zip_files(m)]
+        if zip_manifests:
+            extracted_paths = self.extract_all_zip_files_parallel(zip_manifests)
+            csv_patterns.extend(extracted_paths)
+
+        return csv_patterns
+
+    def extract_all_zip_files_parallel(self, zip_manifests: List[Dict]) -> List[str]:
+        """Extract all ZIP files in parallel and return paths to extracted CSV files."""
+        logging.info(f"Extracting {len(zip_manifests)} ZIP reports in parallel...")
+
+        zip_tasks = []
+        for manifest in zip_manifests:
+            for chunk_key in manifest["reportKeys"]:
+                if chunk_key.endswith(".zip"):
+                    # Handle special path syntax for S3 keys
+                    key_parts = chunk_key.split("/")
+                    if "//" in manifest["report_folder"]:
+                        normalized_key = f"{manifest['report_folder']}/{key_parts[-2]}/{key_parts[-1]}"
+                    else:
+                        normalized_key = chunk_key
+                    zip_tasks.append(normalized_key)
+
+        # Extract all ZIP files in parallel
+        extracted_csv_paths = []
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            # Submit all download/extract tasks
+            future_to_key = {
+                executor.submit(self._download_and_extract_zip, zip_key): zip_key
+                for zip_key in zip_tasks
+            }
+
+            # Collect results as they complete
+            for future in as_completed(future_to_key):
+                zip_key = future_to_key[future]
+                try:
+                    csv_path = future.result()
+                    extracted_csv_paths.append(csv_path)
+                    logging.debug(f"Successfully extracted: {zip_key}")
+                except Exception as e:
+                    logging.error(f"Failed to extract {zip_key}: {e}")
+
+        logging.info(
+            f"Successfully extracted {len(extracted_csv_paths)} CSV files from ZIP archives"
+        )
+        return extracted_csv_paths
+
+    def _download_and_extract_zip(self, s3_key: str) -> str:
+        """Download and extract a single ZIP file, return path to extracted CSV."""
+        # Create unique temporary paths
+        zip_filename = s3_key.split("/")[-1]
+        local_zip_path = os.path.join(
+            tempfile.gettempdir(), f"{zip_filename}_{os.getpid()}"
+        )
+
+        return self.download_and_unzip(s3_key, local_zip_path)
 
     def download_and_unzip(self, s3_key: str, local_zip_path: str) -> str:
         """Download ZIP file from S3 and extract the CSV content."""

@@ -72,9 +72,12 @@ class Component(ComponentBase):
             report_manifests = self._discover_available_reports()
 
             # Step 3: Process the reports and export data
-            self._process_and_export_reports(report_manifests)
+            output_table = self._process_and_export_reports(report_manifests)
 
-            # Step 4: Save final state
+            # Step 4: Write table manifest
+            self._write_table_manifest(output_table)
+
+            # Step 5: Save final state
             self._save_final_state()
 
             logging.info(
@@ -140,26 +143,57 @@ class Component(ComponentBase):
         logging.info(f"{len(report_manifests)} reports found and ready for processing.")
         return report_manifests
 
-    def _process_and_export_reports(self, manifests):
+    def _process_and_export_reports(self, report_manifests) -> str:
         """Process report manifests and export the consolidated data."""
         # Setup DuckDB connection for processing
         self.duckdb_processor.setup_connection()
 
-        # Separate CSV and ZIP manifests for different processing strategies
-        csv_manifests = [
-            m for m in manifests if not self.aws_manager.manifest_contains_zip_files(m)
-        ]
-        zip_manifests = [
-            m for m in manifests if self.aws_manager.manifest_contains_zip_files(m)
-        ]
+        # New unified approach: extract all ZIP files in parallel, then bulk load everything
+        return self._process_reports_unified_bulk(report_manifests)
 
-        # Try efficient bulk loading for CSV files first
-        if csv_manifests and not zip_manifests:
-            if self._try_bulk_csv_processing(csv_manifests):
-                return
+    def _process_reports_unified_bulk(self, report_manifests) -> str:
+        """New unified approach: extract all ZIP files in parallel, then bulk load everything."""
+        logging.info(
+            f"Processing {len(report_manifests)} reports using unified bulk approach..."
+        )
 
-        # Fall back to individual file processing
-        self._process_reports_individually(manifests)
+        # Step 1: Prepare all CSV patterns (S3 direct + extracted from ZIP files in parallel)
+        all_csv_patterns = self.aws_manager.prepare_all_csv_patterns(report_manifests)
+
+        if not all_csv_patterns:
+            logging.warning("No CSV files found to process")
+            raise Exception("No CSV files found to process")
+
+        # Step 2: Update runtime state from manifests
+        self._update_runtime_state_from_manifests(report_manifests)
+
+        # Step 3: Determine final column set for output table
+        final_columns = self.column_normalizer.get_max_header_normalized(
+            report_manifests, self.last_header
+        )
+        self.last_header = final_columns
+
+        # Step 4: Bulk load all CSV files into DuckDB
+        if not self.duckdb_processor.load_csv_files_bulk(all_csv_patterns):
+            raise Exception("Failed to load CSV files in bulk")
+
+        # Step 5: Get current columns from loaded data
+        current_columns = self.duckdb_processor.get_current_columns_from_table()
+
+        # Step 6: Create unified view and export
+        if not self.duckdb_processor.create_unified_view(
+            final_columns, current_columns
+        ):
+            raise Exception("Failed to create unified view")
+
+        # Step 7: Export the data
+        output_path = os.path.join(self.tables_out_path, f"{self.report_name}.csv")
+        self.duckdb_processor.export_data_to_csv("unified_reports", output_path)
+
+        logging.info(
+            f"Successfully processed {len(all_csv_patterns)} files using unified bulk approach"
+        )
+        return output_path
 
     def _try_bulk_csv_processing(self, csv_manifests):
         """Attempt to process CSV files using efficient bulk loading."""
@@ -196,7 +230,7 @@ class Component(ComponentBase):
             logging.error("Failed to create unified view for bulk export")
             return False
 
-    def _process_reports_individually(self, manifests):
+    def _process_reports_individually(self, manifests) -> str:
         """Process report files individually (legacy approach for ZIP files or bulk fallback)."""
         logging.info("Processing reports individually...")
 
@@ -231,6 +265,7 @@ class Component(ComponentBase):
         # Export the consolidated data
         output_path = os.path.join(self.tables_out_path, f"{self.report_name}.csv")
         self.duckdb_processor.export_data_to_csv(result_table, output_path)
+        return output_path
 
     def _append_report_chunks(self, result_table: str, manifest):
         """Process and append all chunks from a single report manifest to the result table."""
@@ -295,10 +330,6 @@ class Component(ComponentBase):
 
     def _save_final_state(self):
         """Save the final execution state for future incremental runs."""
-        output_table = os.path.join(self.tables_out_path, f"{self.report_name}.csv")
-
-        # Write table manifest
-        self._write_table_manifest(output_table)
 
         # Write state file
         self.write_state_file(
@@ -323,7 +354,8 @@ class Component(ComponentBase):
                 self.since_timestamp = manifest["last_modified"]
                 self.latest_report_id = manifest["assemblyId"]
 
-    def _convert_date_strings(self, since, until):
+    @staticmethod
+    def _convert_date_strings(since, until):
         """Convert date strings to datetime objects."""
         if since == "2000-01-01":
             start_date = datetime(2000, 1, 1)

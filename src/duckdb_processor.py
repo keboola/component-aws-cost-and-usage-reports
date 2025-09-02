@@ -68,19 +68,24 @@ class DuckDBProcessor:
                 pass
             self.con = None
 
-    def load_csv_files_bulk(self, s3_patterns: List[str]) -> bool:
-        """Load CSV files from S3 patterns using DuckDB bulk loading."""
-        if not s3_patterns:
+    def load_csv_files_bulk(self, csv_patterns: List[str]) -> bool:
+        """Load CSV files from mixed patterns (S3 and local) using DuckDB bulk loading."""
+        if not csv_patterns:
             logging.info("No CSV patterns to load")
             return False
 
-        patterns_str = "', '".join(s3_patterns)
-        logging.info(f"Loading {len(s3_patterns)} CSV patterns from S3...")
+        patterns_str = "', '".join(csv_patterns)
+        s3_count = sum(1 for p in csv_patterns if p.startswith("s3://"))
+        local_count = len(csv_patterns) - s3_count
+
+        logging.info(
+            f"Loading {len(csv_patterns)} CSV files ({s3_count} from S3, {local_count} local)..."
+        )
 
         try:
             self.con.execute(f"""
                 CREATE TABLE raw_reports AS
-                SELECT *, filename() as source_file
+                SELECT *
                 FROM read_csv_auto(['{patterns_str}'],
                                    HEADER=TRUE,
                                    ALL_VARCHAR=TRUE,
