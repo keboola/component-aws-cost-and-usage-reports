@@ -2,7 +2,7 @@ import logging
 import os
 import sys
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict
 
 import boto3
 import pytz
@@ -242,30 +242,28 @@ class Component(ComponentBase):
     def _create_schema_from_duckdb_table(self, table_name: str) -> Dict[str, ColumnDefinition]:
         """Create proper schema with ColumnDefinition objects for Keboola Storage."""
         schema = {}
-        
+
         # Get column types from DuckDB processor
         column_types = self.duckdb_processor.get_column_types_from_table(table_name)
-        
+
         for col_name, kbc_type in column_types.items():
             # Skip metadata columns
             if col_name == FILENAME_COLUMN:
                 continue
-            
+
             # Create DataType object
             data_type = DataType(dtype=kbc_type)
-            
+
             # Create ColumnDefinition with proper structure
             column_def = ColumnDefinition(
                 data_types={col_name: data_type},
                 nullable=True,
                 primary_key=False
             )
-            
+
             schema[col_name] = column_def
-            
+
         return schema
-
-
 
     def _write_table_manifest(self, output_table):
         """Write table manifest with complete column information and data types."""

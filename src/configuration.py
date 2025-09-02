@@ -23,6 +23,7 @@ class LoadingOptions(BaseModel):
     def incremental_output_bool(self) -> bool:
         return self.incremental_output == 1
 
+
 class Configuration(BaseModel):
     """Main component configuration."""
 
