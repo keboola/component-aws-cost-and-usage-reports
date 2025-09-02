@@ -2,14 +2,16 @@ import logging
 import os
 import sys
 from datetime import datetime
+from typing import Dict, List
 
 import boto3
 import pytz
 from keboola.component.base import ComponentBase
+from keboola.component.dao import ColumnDefinition, DataType
 
 from configuration import Configuration
 from aws_report_manager import AWSReportManager
-from duckdb_processor import DuckDBProcessor
+from duckdb_client import DuckDB, RAW_REPORTS_TABLE, UNIFIED_REPORTS_VIEW, FILENAME_COLUMN
 from column_normalizer import ColumnNormalizer
 
 
@@ -48,7 +50,7 @@ class Component(ComponentBase):
             bucket=self.config.aws_parameters.s3_bucket,
             report_prefix=self.config.report_path_prefix,
         )
-        self.duckdb_processor = DuckDBProcessor(self.config)
+        self.duckdb_processor = DuckDB(self.config)
         self.column_normalizer = ColumnNormalizer()
 
         # Load state
@@ -61,6 +63,8 @@ class Component(ComponentBase):
         self.until_timestamp = None
         self.report_name = None
         self.latest_report_id = self.last_report_id
+        self.column_types = {}
+        self.export_output_path = None
 
     def run(self):
         """Main execution method - orchestrates the entire AWS Cost and Usage Report extraction process."""
@@ -72,10 +76,10 @@ class Component(ComponentBase):
             report_manifests = self._discover_available_reports()
 
             # Step 3: Process the reports and export data
-            output_table = self._process_reports_unified_bulk(report_manifests)
+            self._process_reports_unified_bulk(report_manifests)
 
             # Step 4: Write table manifest
-            self._write_table_manifest(output_table)
+            self._write_table_manifest(self.export_output_path)
 
             # Step 5: Save final state
             self._save_final_state()
@@ -143,7 +147,7 @@ class Component(ComponentBase):
         logging.info(f"{len(report_manifests)} reports found and ready for processing.")
         return report_manifests
 
-    def _process_reports_unified_bulk(self, report_manifests) -> str:
+    def _process_reports_unified_bulk(self, report_manifests):
         """New unified approach: extract all ZIP files in parallel, then bulk load everything."""
         logging.info(
             f"Processing {len(report_manifests)} reports using unified bulk approach..."
@@ -175,20 +179,24 @@ class Component(ComponentBase):
         # Step 5: Get current columns from loaded data
         current_columns = self.duckdb_processor.get_current_columns_from_table()
 
-        # Step 6: Create unified view and export
-        if not self.duckdb_processor.create_unified_view(
-            final_columns, current_columns
+        # Step 6: Create a unified view with proper type conversions
+        if not self.duckdb_processor.create_unified_view_with_types(
+            final_columns,
+                current_columns,
+                self.duckdb_processor.get_column_types_from_table(RAW_REPORTS_TABLE)
         ):
-            raise Exception("Failed to create unified view")
+            raise Exception("Failed to create typed unified view")
 
-        # Step 7: Export the data
-        output_path = os.path.join(self.tables_out_path, f"{self.report_name}.csv")
-        self.duckdb_processor.export_data_to_csv("unified_reports", output_path)
+        # Step 7: Get final column types for manifest
+        self.column_types = self.duckdb_processor.get_column_types_from_table()
+
+        # Step 8: Export the data
+        self.export_output_path = os.path.join(self.tables_out_path, f"{self.report_name}.csv")
+        self.duckdb_processor.export_data_to_csv(self.export_output_path)
 
         logging.info(
             f"Successfully processed {len(all_csv_patterns)} files using unified bulk approach"
         )
-        return output_path
 
     def _save_final_state(self):
         """Save the final execution state for future incremental runs."""
@@ -231,18 +239,50 @@ class Component(ComponentBase):
 
         return start_date, end_date
 
-    def _write_table_manifest(self, output_table):
-        """Write table manifest with complete column information."""
-        table_name = os.path.basename(output_table)
-        incremental = self.config.is_incremental
-        pkey = self.config.primary_key
+    def _create_schema_from_duckdb_table(self, table_name: str) -> Dict[str, ColumnDefinition]:
+        """Create proper schema with ColumnDefinition objects for Keboola Storage."""
+        schema = {}
+        
+        # Get column types from DuckDB processor
+        column_types = self.duckdb_processor.get_column_types_from_table(table_name)
+        
+        for col_name, kbc_type in column_types.items():
+            # Skip metadata columns
+            if col_name == FILENAME_COLUMN:
+                continue
+            
+            # Create DataType object
+            data_type = DataType(dtype=kbc_type)
+            
+            # Create ColumnDefinition with proper structure
+            column_def = ColumnDefinition(
+                data_types={col_name: data_type},
+                nullable=True,
+                primary_key=False
+            )
+            
+            schema[col_name] = column_def
+            
+        return schema
 
-        # Create table definition with all discovered columns
+
+
+    def _write_table_manifest(self, output_table):
+        """Write table manifest with complete column information and data types."""
+        table_name = os.path.basename(output_table)
+        incremental = self.config.loading_options.incremental_output_bool
+        pkey = self.config.loading_options.pkey
+
+        # Create schema with ColumnDefinition objects
+        schema = self._create_schema_from_duckdb_table(UNIFIED_REPORTS_VIEW)
+
+        # Create table definition with proper schema
         table_def = self.create_out_table_definition(
             name=table_name,
             incremental=incremental,
             primary_key=pkey,
-            columns=self.last_header,
+            schema=schema,
+            has_header=True,
         )
 
         # Write manifest

@@ -17,8 +17,11 @@ class LoadingOptions(BaseModel):
     """Data loading configuration."""
 
     incremental_output: int = Field(default=0, ge=0, le=1)  # 0=Full Load, 1=Incremental
-    pkey: List[str] = Field(default_factory=list)  # Primary key columns
+    pkey: List[str] = Field(default=[])  # Primary key columns
 
+    @property
+    def incremental_output_bool(self) -> bool:
+        return self.incremental_output == 1
 
 class Configuration(BaseModel):
     """Main component configuration."""
@@ -41,13 +44,3 @@ class Configuration(BaseModel):
             raise UserException(
                 f"Configuration validation error: {', '.join(error_messages)}"
             )
-
-    @property
-    def is_incremental(self) -> bool:
-        """Check if incremental loading is enabled."""
-        return self.loading_options.incremental_output == 1
-
-    @property
-    def primary_key(self) -> List[str]:
-        """Get primary key columns."""
-        return self.loading_options.pkey
