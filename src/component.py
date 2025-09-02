@@ -295,7 +295,7 @@ class Component(ComponentBase):
 
     def _save_final_state(self):
         """Save the final execution state for future incremental runs."""
-        output_table = os.path.join(self.tables_out_path, self.report_name)
+        output_table = os.path.join(self.tables_out_path, f"{self.report_name}.csv")
 
         # Write table manifest
         self._write_table_manifest(output_table)
@@ -346,7 +346,6 @@ class Component(ComponentBase):
         # Create table definition with all discovered columns
         table_def = self.create_out_table_definition(
             name=table_name,
-            path=f"{table_name}.csv",
             incremental=incremental,
             primary_key=pkey,
             columns=self.last_header,
