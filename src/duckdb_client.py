@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import List, Dict
+from typing import List
 
 import duckdb
 from duckdb import DuckDBPyConnection
@@ -122,108 +122,6 @@ class DuckDB:
         except Exception as e:
             logging.error(f"Failed to get columns from table '{table_name}': {e}")
             return []
-
-    def get_column_types_from_table(
-        self, table_name: str = UNIFIED_REPORTS_VIEW
-    ) -> Dict[str, str]:
-        """Get column names and their data types from DuckDB table."""
-        try:
-            table_info = self.con.execute(
-                f"PRAGMA table_info('{table_name}');"
-            ).fetchall()
-
-            # Convert DuckDB types to Keboola Storage types
-            type_mapping = {
-                "VARCHAR": "STRING",
-                "BIGINT": "INTEGER",
-                "INTEGER": "INTEGER",
-                "DOUBLE": "NUMERIC",
-                "DECIMAL": "NUMERIC",
-                "FLOAT": "NUMERIC",
-                "BOOLEAN": "BOOLEAN",
-                "DATE": "DATE",
-                "TIMESTAMP": "TIMESTAMP",
-                "TIME": "TIME",
-            }
-
-            column_types = {}
-            for row in table_info:
-                col_name = row[1]  # column name
-                col_type = row[2].upper()  # column type
-
-                # Map DuckDB type to KBC Storage type
-                kbc_type = type_mapping.get(col_type, "STRING")
-                column_types[col_name] = kbc_type
-
-            return column_types
-        except Exception as e:
-            logging.error(f"Failed to get column types: {e}")
-            return {}
-
-    @staticmethod
-    def _convert_data_type(column_name: str, data_type: str) -> str:
-        """Convert column to appropriate DuckDB data type with safe casting."""
-        conversion_map = {
-            "INTEGER": f'TRY_CAST("{column_name}" AS BIGINT)',
-            "NUMERIC": f'TRY_CAST("{column_name}" AS DOUBLE)',
-            "BOOLEAN": f'TRY_CAST("{column_name}" AS BOOLEAN)',
-            "DATE": f'TRY_CAST("{column_name}" AS DATE)',
-            "TIMESTAMP": f'TRY_CAST("{column_name}" AS TIMESTAMP)',
-            "TIME": f'TRY_CAST("{column_name}" AS TIME)',
-            "STRING": f'"{column_name}"',  # No conversion needed for strings
-        }
-
-        return conversion_map.get(data_type, f'"{column_name}"')
-
-    def create_unified_view_with_types(
-        self,
-        final_columns: List[str],
-        current_columns: List[str],
-        column_types: Dict[str, str],
-    ) -> bool:
-        """Create unified view with proper data type conversions."""
-        select_parts = []
-
-        for col in final_columns:
-            # Convert back from KBC format to original
-            original_col = col.replace("__", "/")
-            data_type = column_types.get(col, "STRING")
-
-            if original_col in current_columns:
-                # Apply type conversion
-                converted_col = self._convert_data_type(original_col, data_type)
-                select_parts.append(f'{converted_col} as "{col}"')
-            else:
-                # Column not present - use typed NULL
-                null_value = self._get_typed_null(data_type)
-                select_parts.append(f'{null_value} as "{col}"')
-
-        select_sql = ", ".join(select_parts)
-
-        try:
-            self.con.execute(f"""
-                CREATE OR REPLACE VIEW {UNIFIED_REPORTS_VIEW} AS
-                SELECT {select_sql}
-                FROM {RAW_REPORTS_TABLE};
-            """)
-            return True
-        except Exception as e:
-            logging.error(f"Failed to create typed unified view: {e}")
-            return False
-
-    def _get_typed_null(self, data_type: str) -> str:
-        """Get properly typed NULL value for given data type."""
-        null_map = {
-            "INTEGER": "CAST(NULL AS BIGINT)",
-            "NUMERIC": "CAST(NULL AS DOUBLE)",
-            "BOOLEAN": "CAST(NULL AS BOOLEAN)",
-            "DATE": "CAST(NULL AS DATE)",
-            "TIMESTAMP": "CAST(NULL AS TIMESTAMP)",
-            "TIME": "CAST(NULL AS TIME)",
-            "STRING": "CAST(NULL AS VARCHAR)",
-        }
-
-        return null_map.get(data_type, "CAST(NULL AS VARCHAR)")
 
     def create_unified_view(
         self, final_columns: List[str], current_columns: List[str]

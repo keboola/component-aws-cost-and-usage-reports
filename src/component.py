@@ -7,11 +7,11 @@ from typing import Dict
 import boto3
 import pytz
 from keboola.component.base import ComponentBase
-from keboola.component.dao import ColumnDefinition, DataType
+from keboola.component.dao import ColumnDefinition, BaseType, SupportedDataTypes
 
 from configuration import Configuration
 from aws_report_manager import AWSReportManager
-from duckdb_client import DuckDB, RAW_REPORTS_TABLE, UNIFIED_REPORTS_VIEW, FILENAME_COLUMN
+from duckdb_client import DuckDB, UNIFIED_REPORTS_VIEW, FILENAME_COLUMN
 from column_normalizer import ColumnNormalizer
 
 
@@ -179,19 +179,16 @@ class Component(ComponentBase):
         # Step 5: Get current columns from loaded data
         current_columns = self.duckdb_processor.get_current_columns_from_table()
 
-        # Step 6: Create a unified view with proper type conversions
-        if not self.duckdb_processor.create_unified_view_with_types(
-            final_columns,
-                current_columns,
-                self.duckdb_processor.get_column_types_from_table(RAW_REPORTS_TABLE)
+        # Step 6: Create a simple unified view (all strings, no type conversion)
+        if not self.duckdb_processor.create_unified_view(
+            final_columns, current_columns
         ):
-            raise Exception("Failed to create typed unified view")
+            raise Exception("Failed to create unified view")
 
-        # Step 7: Get final column types for manifest
-        self.column_types = self.duckdb_processor.get_column_types_from_table()
-
-        # Step 8: Export the data
-        self.export_output_path = os.path.join(self.tables_out_path, f"{self.report_name}.csv")
+        # Step 7: Export the data
+        self.export_output_path = os.path.join(
+            self.tables_out_path, f"{self.report_name}.csv"
+        )
         self.duckdb_processor.export_data_to_csv(self.export_output_path)
 
         logging.info(
@@ -239,29 +236,21 @@ class Component(ComponentBase):
 
         return start_date, end_date
 
-    def _create_schema_from_duckdb_table(self, table_name: str) -> Dict[str, ColumnDefinition]:
-        """Create proper schema with ColumnDefinition objects for Keboola Storage."""
-        schema = {}
+    def _create_schema_all_strings(
+        self, table_name: str
+    ) -> Dict[str, ColumnDefinition]:
+        """Create schema with all columns as STRING native types."""
+        # Get column names from DuckDB table
+        columns = self.duckdb_processor.get_current_columns_from_table(table_name)
 
-        # Get column types from DuckDB processor
-        column_types = self.duckdb_processor.get_column_types_from_table(table_name)
-
-        for col_name, kbc_type in column_types.items():
-            # Skip metadata columns
-            if col_name == FILENAME_COLUMN:
-                continue
-
-            # Create DataType object
-            data_type = DataType(dtype=kbc_type)
-
-            # Create ColumnDefinition with proper structure
-            column_def = ColumnDefinition(
-                data_types={col_name: data_type},
-                nullable=True,
-                primary_key=False
+        # All columns as STRING with native types
+        schema = {
+            col_name: ColumnDefinition(
+                data_types=BaseType(dtype=SupportedDataTypes.STRING)
             )
-
-            schema[col_name] = column_def
+            for col_name in columns
+            if col_name != FILENAME_COLUMN
+        }
 
         return schema
 
@@ -271,8 +260,8 @@ class Component(ComponentBase):
         incremental = self.config.loading_options.incremental_output_bool
         pkey = self.config.loading_options.pkey
 
-        # Create schema with ColumnDefinition objects
-        schema = self._create_schema_from_duckdb_table(UNIFIED_REPORTS_VIEW)
+        # Create schema with all columns as STRING native types
+        schema = self._create_schema_all_strings(UNIFIED_REPORTS_VIEW)
 
         # Create table definition with proper schema
         table_def = self.create_out_table_definition(
