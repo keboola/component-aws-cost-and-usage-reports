@@ -96,11 +96,12 @@ class Component(ComponentBase):
 
     def _prepare_runtime_state(self):
         """Prepare runtime state from configuration."""
-        # Parse date range from configuration
-        since = self.config.min_date_since or "2000-01-01"
-        until = self.config.max_date
-        logging.info(f"Date range: {since} to {until}")
-        start_date, end_date = self._convert_date_strings(since, until)
+        # Get date range from configuration properties
+        start_date = self.config.start_datetime
+        end_date = self.config.end_datetime
+        logging.info(
+            f"Date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}"
+        )
 
         # Convert to UTC timestamps
         self.until_timestamp = pytz.utc.localize(end_date)
@@ -220,21 +221,6 @@ class Component(ComponentBase):
             if self.since_timestamp < manifest["last_modified"]:
                 self.since_timestamp = manifest["last_modified"]
                 self.latest_report_id = manifest["assemblyId"]
-
-    @staticmethod
-    def _convert_date_strings(since, until):
-        """Convert date strings to datetime objects."""
-        if since == "2000-01-01":
-            start_date = datetime(2000, 1, 1)
-        else:
-            start_date = datetime.strptime(since, "%Y-%m-%d")
-
-        if until == "now":
-            end_date = datetime.now()
-        else:
-            end_date = datetime.strptime(until, "%Y-%m-%d")
-
-        return start_date, end_date
 
     def _create_schema_all_strings(
         self, table_name: str

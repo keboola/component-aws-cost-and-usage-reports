@@ -1,6 +1,7 @@
 import logging
+from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from keboola.component.exceptions import UserException
 
 
@@ -34,6 +35,41 @@ class Configuration(BaseModel):
     since_last: bool = True
     loading_options: LoadingOptions = Field(default_factory=LoadingOptions)
     debug: bool = False
+
+    @property
+    def start_datetime(self) -> datetime:
+        """Get start date as datetime object."""
+        since = self.min_date_since or "2000-01-01"
+        return datetime.strptime(since, "%Y-%m-%d")
+
+    @property
+    def end_datetime(self) -> datetime:
+        """Get end date as datetime object."""
+        if self.max_date == "now":
+            return datetime.now()
+        return datetime.strptime(self.max_date, "%Y-%m-%d")
+
+    @field_validator("min_date_since")
+    @classmethod
+    def validate_min_date(cls, v):
+        """Validate date format."""
+        if v is not None:
+            try:
+                datetime.strptime(v, "%Y-%m-%d")
+            except ValueError:
+                raise ValueError("min_date_since must be in YYYY-MM-DD format")
+        return v
+
+    @field_validator("max_date")
+    @classmethod
+    def validate_max_date(cls, v):
+        """Validate date format."""
+        if v != "now":
+            try:
+                datetime.strptime(v, "%Y-%m-%d")
+            except ValueError:
+                raise ValueError("max_date must be 'now' or YYYY-MM-DD format")
+        return v
 
     def __init__(self, /, **data):
         try:
