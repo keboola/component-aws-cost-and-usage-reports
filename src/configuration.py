@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from keboola.component.exceptions import UserException
 
 
@@ -49,27 +49,24 @@ class Configuration(BaseModel):
             return datetime.now()
         return datetime.strptime(self.max_date, "%Y-%m-%d")
 
-    @field_validator("min_date_since")
-    @classmethod
-    def validate_min_date(cls, v):
-        """Validate date format."""
-        if v is not None:
+    @model_validator(mode="after")
+    def validate_dates(self) -> "Configuration":
+        """Validate date formats."""
+        # Validate min_date_since
+        if self.min_date_since is not None and self.min_date_since != "":
             try:
-                datetime.strptime(v, "%Y-%m-%d")
+                datetime.strptime(self.min_date_since, "%Y-%m-%d")
             except ValueError:
                 raise ValueError("min_date_since must be in YYYY-MM-DD format")
-        return v
 
-    @field_validator("max_date")
-    @classmethod
-    def validate_max_date(cls, v):
-        """Validate date format."""
-        if v != "now":
+        # Validate max_date
+        if self.max_date != "now":
             try:
-                datetime.strptime(v, "%Y-%m-%d")
+                datetime.strptime(self.max_date, "%Y-%m-%d")
             except ValueError:
                 raise ValueError("max_date must be 'now' or YYYY-MM-DD format")
-        return v
+
+        return self
 
     def __init__(self, /, **data):
         try:
@@ -77,7 +74,16 @@ class Configuration(BaseModel):
             if self.debug:
                 logging.debug("Component will run in Debug mode")
         except ValidationError as e:
-            error_messages = [f"{err['loc'][0]}: {err['msg']}" for err in e.errors()]
+            error_messages = []
+            for err in e.errors():
+                # Handle Pydantic V2 error format properly
+                if "loc" in err and err["loc"]:
+                    location = ".".join(str(x) for x in err["loc"])
+                else:
+                    location = "unknown"
+                error_messages.append(
+                    f"{location}: {err.get('msg', 'Validation error')}"
+                )
             raise UserException(
                 f"Configuration validation error: {', '.join(error_messages)}"
             )
