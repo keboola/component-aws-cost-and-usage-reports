@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from keboola.component.exceptions import UserException
 
 
