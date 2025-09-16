@@ -2,17 +2,15 @@ import logging
 import os
 import sys
 from datetime import datetime
-from typing import Dict
 
 import boto3
 import pytz
 from keboola.component.base import ComponentBase
-from keboola.component.dao import ColumnDefinition, BaseType, SupportedDataTypes
 
 from configuration import Configuration
 from aws_report_manager import AWSReportManager
 from duckdb_client import DuckDB, UNIFIED_REPORTS_VIEW, FILENAME_COLUMN
-from column_normalizer import ColumnNormalizer
+from keboola.utils.header_normalizer import DictHeaderNormalizer
 
 
 class Component(ComponentBase):
@@ -27,10 +25,6 @@ class Component(ComponentBase):
         except Exception as e:
             logging.error(f"Configuration validation failed: {e}")
             exit(1)
-
-        # Override debug from config
-        if self.config.debug:
-            debug = True
 
         if debug:
             logging.getLogger().setLevel(logging.DEBUG)
@@ -51,7 +45,9 @@ class Component(ComponentBase):
             report_prefix=self.config.report_path_prefix,
         )
         self.duckdb_processor = DuckDB(self.config)
-        self.column_normalizer = ColumnNormalizer()
+        self.column_normalizer = DictHeaderNormalizer(
+            replace_dict={'/': '__'}
+        )
 
         # Load state
         self.last_state = self.get_state_file()
@@ -67,7 +63,8 @@ class Component(ComponentBase):
         self.export_output_path = None
 
     def run(self):
-        """Main execution method - orchestrates the entire AWS Cost and Usage Report extraction process."""
+        """Main execution method - orchestrates the entire AWS Cost and Usage
+        Report extraction process."""
         try:
             # Step 1: Prepare runtime state
             self._prepare_runtime_state()
@@ -85,14 +82,13 @@ class Component(ComponentBase):
             self._save_final_state()
 
             logging.info(
-                f"Extraction finished successfully at {datetime.now().isoformat()}."
+                f"Extraction finished successfully at "
+                f"{datetime.now().isoformat()}."
             )
 
         except Exception as e:
             logging.error(f"Report extraction failed: {e}")
             raise e
-        finally:
-            self.duckdb_processor.cleanup_connection()
 
     def _prepare_runtime_state(self):
         """Prepare runtime state from configuration."""
@@ -100,7 +96,8 @@ class Component(ComponentBase):
         start_date = self.config.start_datetime
         end_date = self.config.end_datetime
         logging.info(
-            f"Date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}"
+            f"Date range: {start_date.strftime('%Y-%m-%d')} to "
+            f"{end_date.strftime('%Y-%m-%d')}"
         )
 
         # Convert to UTC timestamps
@@ -110,7 +107,9 @@ class Component(ComponentBase):
         last_file_timestamp = self.last_state.get("last_file_timestamp")
 
         if last_file_timestamp and self.config.since_last:
-            self.since_timestamp = datetime.fromisoformat(last_file_timestamp)
+            self.since_timestamp = datetime.fromisoformat(
+                last_file_timestamp
+            )
         else:
             self.since_timestamp = pytz.utc.localize(start_date)
 
@@ -118,9 +117,11 @@ class Component(ComponentBase):
         self.report_name = self.aws_manager.get_report_name()
 
     def _discover_available_reports(self):
-        """Discover and filter available reports from S3 based on configuration."""
+        """Discover and filter available reports from S3 based on
+        configuration."""
         logging.info(
-            f"Discovering reports for '{self.report_name}' since {self.since_timestamp}"
+            f"Discovering reports for '{self.report_name}' since "
+            f"{self.since_timestamp}"
         )
 
         # Get all S3 objects matching our prefix
@@ -133,29 +134,41 @@ class Component(ComponentBase):
 
         # Filter manifests by date range if not in incremental mode
         if not self.config.since_last:
-            report_manifests = self.aws_manager.filter_manifests_by_date_range(
-                report_manifests, self.since_timestamp, self.until_timestamp
+            report_manifests = (
+                self.aws_manager.filter_manifests_by_date_range(
+                    report_manifests, self.since_timestamp,
+                    self.until_timestamp
+                )
             )
 
         # Validate we found reports
         if not report_manifests:
             logging.warning(
-                "No reports found for the specified period. Check your prefix setting and date range."
+                "No reports found for the specified period. Check your "
+                "prefix setting and date range."
             )
             self.write_state_file(self.last_state)
             exit(0)
 
-        logging.info(f"{len(report_manifests)} reports found and ready for processing.")
+        logging.info(
+            f"{len(report_manifests)} reports found and ready for "
+            "processing."
+        )
         return report_manifests
 
     def _process_reports_unified_bulk(self, report_manifests):
-        """New unified approach: extract all ZIP files in parallel, then bulk load everything."""
+        """New unified approach: extract all ZIP files in parallel, then
+        bulk load everything."""
         logging.info(
-            f"Processing {len(report_manifests)} reports using unified bulk approach..."
+            f"Processing {len(report_manifests)} reports using unified "
+            "bulk approach..."
         )
 
-        # Step 1: Prepare all CSV patterns (S3 direct + extracted from ZIP files in parallel)
-        all_csv_patterns = self.aws_manager.prepare_all_csv_patterns(report_manifests)
+        # Step 1: Prepare all CSV patterns (S3 direct + extracted from
+        # ZIP files in parallel)
+        all_csv_patterns = self.aws_manager.prepare_all_csv_patterns(
+            report_manifests
+        )
 
         if not all_csv_patterns:
             logging.warning("No CSV files found to process")
@@ -165,7 +178,7 @@ class Component(ComponentBase):
         self._update_runtime_state_from_manifests(report_manifests)
 
         # Step 3: Determine final column set for output table
-        final_columns = self.column_normalizer.get_max_header_normalized(
+        final_columns = self._get_max_header_normalized(
             report_manifests, self.last_header
         )
         self.last_header = final_columns
@@ -178,9 +191,12 @@ class Component(ComponentBase):
             raise Exception("Failed to load CSV files in bulk")
 
         # Step 5: Get current columns from loaded data
-        current_columns = self.duckdb_processor.get_current_columns_from_table()
+        current_columns = (
+            self.duckdb_processor.get_current_columns_from_table()
+        )
 
-        # Step 6: Create a simple unified view (all strings, no type conversion)
+        # Step 6: Create a simple unified view (all strings, no type
+        # conversion)
         if not self.duckdb_processor.create_unified_view(
             final_columns, current_columns
         ):
@@ -193,7 +209,8 @@ class Component(ComponentBase):
         self.duckdb_processor.export_data_to_csv(self.export_output_path)
 
         logging.info(
-            f"Successfully processed {len(all_csv_patterns)} files using unified bulk approach"
+            f"Successfully processed {len(all_csv_patterns)} files using "
+            "unified bulk approach"
         )
 
     def _save_final_state(self):
@@ -222,39 +239,61 @@ class Component(ComponentBase):
                 self.since_timestamp = manifest["last_modified"]
                 self.latest_report_id = manifest["assemblyId"]
 
-    def _create_schema_all_strings(
-        self, table_name: str
-    ) -> Dict[str, ColumnDefinition]:
-        """Create schema with all columns as STRING native types."""
-        # Get column names from DuckDB table
-        columns = self.duckdb_processor.get_current_columns_from_table(table_name)
+    def _get_manifest_normalized_columns(self, manifest):
+        """Extract and normalize column names from manifest metadata."""
+        # Build column names from manifest metadata
+        manifest_columns = [
+            col["category"] + "/" + col["name"] for col in manifest["columns"]
+        ]
 
-        # All columns as STRING with native types
-        schema = {
-            col_name: ColumnDefinition(
-                data_types=BaseType(dtype=SupportedDataTypes.STRING)
+        # Normalize column names using HeaderNormalizer
+        normalized_columns = self.column_normalizer.normalize_header(
+            manifest_columns
+        )
+
+        # Remove duplicates - use set to remove duplicates then sort
+        return sorted(list(set(normalized_columns)))
+
+    def _get_max_header_normalized(self, manifests, current_header):
+        """Build normalized column schema from all manifests."""
+        header = current_header.copy()
+
+        for manifest in manifests:
+            # Get normalized columns from this manifest
+            normalized_columns = self._get_manifest_normalized_columns(
+                manifest
             )
-            for col_name in columns
-            if col_name != FILENAME_COLUMN
-        }
 
-        return schema
+            # Merge with existing header
+            norm_cols = set(normalized_columns)
+            if not norm_cols.issubset(set(header)):
+                norm_cols.update(set(header))
+                header = list(norm_cols)
+                header.sort()
+
+        return header
 
     def _write_table_manifest(self, output_table):
-        """Write table manifest with complete column information and data types."""
+        """Write table manifest with complete column information and data
+        types."""
         table_name = os.path.basename(output_table)
         incremental = self.config.loading_options.incremental_output_bool
         pkey = self.config.loading_options.pkey
 
-        # Create schema with all columns as STRING native types
-        schema = self._create_schema_all_strings(UNIFIED_REPORTS_VIEW)
+        # Get column names from DuckDB table
+        columns = self.duckdb_processor.get_current_columns_from_table(
+            UNIFIED_REPORTS_VIEW
+        )
+        # Filter out metadata columns
+        schema_columns = [col for col in columns if col != FILENAME_COLUMN]
 
-        # Create table definition with proper schema
+        # Create table definition with schema as list of strings
+        # (defaults to STRING type)
         table_def = self.create_out_table_definition(
             name=table_name,
             incremental=incremental,
             primary_key=pkey,
-            schema=schema,
+            schema=schema_columns,
             has_header=True,
         )
 

@@ -30,8 +30,9 @@ class DuckDB:
         threads: int = 4, max_memory: int = 1024, db_path: str = ":memory:"
     ) -> DuckDBPyConnection:
         """
-        Returns connection to temporary DuckDB database with advanced optimizations.
-        DuckDB supports thread-safe access to a single connection.
+        Returns connection to temporary DuckDB database with advanced
+        optimizations. DuckDB supports thread-safe access to a single
+        connection.
         """
         os.makedirs(DUCK_DB_DIR, exist_ok=True)
         # Enhanced configuration with performance optimizations
@@ -51,7 +52,8 @@ class DuckDB:
         return conn
 
     def setup_connection(self):
-        """Setup DuckDB connection with S3 credentials and performance optimizations."""
+        """Setup DuckDB connection with S3 credentials and performance
+        optimizations."""
         if self.con:
             return  # already setup
 
@@ -59,26 +61,20 @@ class DuckDB:
         self.con = self._init_connection()
         self.con.execute("INSTALL httpfs;")
         self.con.execute("LOAD httpfs;")
-        self.con.execute(f"SET s3_region='{self.config.aws_parameters.aws_region}';")
+        self.con.execute(
+            f"SET s3_region='{self.config.aws_parameters.aws_region}';"
+        )
         self.con.execute(
             f"SET s3_access_key_id='{self.config.aws_parameters.api_key_id}';"
         )
         self.con.execute(
-            f"SET s3_secret_access_key='{self.config.aws_parameters.api_key_secret}';"
+            f"SET s3_secret_access_key='"
+            f"{self.config.aws_parameters.api_key_secret}';"
         )
 
-    def cleanup_connection(self):
-        """Cleanup DuckDB connection."""
-        if self.con:
-            try:
-                self.con.close()
-            except Exception as e:
-                logging.warning(f"Failed to close DuckDB connection: {e}")
-                pass
-            self.con = None
-
     def load_csv_files_bulk(self, csv_patterns: List[str]) -> bool:
-        """Load CSV files from mixed patterns (S3 and local) using DuckDB bulk loading."""
+        """Load CSV files from mixed patterns (S3 and local) using DuckDB
+        bulk loading."""
         if not csv_patterns:
             logging.info("No CSV patterns to load")
             return False
@@ -88,7 +84,8 @@ class DuckDB:
         local_count = len(csv_patterns) - s3_count
 
         logging.info(
-            f"Loading {len(csv_patterns)} CSV files ({s3_count} from S3, {local_count} local)..."
+            f"Loading {len(csv_patterns)} CSV files ({s3_count} from S3, "
+            f"{local_count} local)..."
         )
 
         try:
@@ -112,15 +109,17 @@ class DuckDB:
         """Get current columns from DuckDB table."""
         try:
             columns = [
-                r[1]
+                r[0]
                 for r in self.con.execute(
-                    f"PRAGMA table_info('{table_name}');"
+                    f"DESCRIBE {table_name};"
                 ).fetchall()
-                if r[1] != FILENAME_COLUMN  # filter out metadata column
+                if r[0] != FILENAME_COLUMN  # filter out metadata column
             ]
             return columns
         except Exception as e:
-            logging.error(f"Failed to get columns from table '{table_name}': {e}")
+            logging.error(
+                f"Failed to get columns from table '{table_name}': {e}"
+            )
             return []
 
     def create_unified_view(
@@ -153,6 +152,7 @@ class DuckDB:
     def export_data_to_csv(self, output_path: str):
         """Export data from DuckDB table to CSV file."""
         self.con.execute(
-            f"COPY {UNIFIED_REPORTS_VIEW} TO '{output_path}' (HEADER, DELIMITER ',');"
+            f"COPY {UNIFIED_REPORTS_VIEW} TO '{output_path}' "
+            "(HEADER, DELIMITER ',');"
         )
         logging.info(f"Data exported to {output_path}")

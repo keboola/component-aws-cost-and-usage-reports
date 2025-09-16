@@ -1,5 +1,6 @@
 duckdb>=0.9.0
-keboola.component>=1.5.0
+keboola.component>=1.6.10
+keboola.utils>=1.0.0
 boto3>=1.34.0
 botocore>=1.34.0
 dateparser>=1.2.0
