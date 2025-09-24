@@ -64,7 +64,6 @@ class CUR2ReportHandler(BaseReportHandler):
                     )
                     manifest["period"] = period
                     manifest["format_version"] = "2.0"
-                    
                     # Ensure assemblyId exists (fallback to reportId or generate one)
                     if "assemblyId" not in manifest:
                         manifest["assemblyId"] = manifest.get(
@@ -93,16 +92,16 @@ class CUR2ReportHandler(BaseReportHandler):
             # CUR 2.0 uses 'dataFiles' instead of 'reportKeys'
             data_files = manifest.get("dataFiles", [])
             report_keys = manifest.get("reportKeys", [])  # Fallback for older format
-            
             files_to_process = data_files or report_keys
-            
-            logging.info(f"Processing manifest with base_path='{base_path}', dataFiles={data_files}, reportKeys={report_keys}")
+            logging.info(
+                f"Processing manifest: base_path='{base_path}', "
+                f"dataFiles={len(data_files)}, reportKeys={len(report_keys)}"
+            )
 
             if files_to_process:
                 # Check if files are GZIP - if so, download and extract them locally
                 gzip_files = [f for f in files_to_process if f.endswith('.gz')]
                 csv_files = [f for f in files_to_process if f.endswith('.csv')]
-                
                 # Handle GZIP files - download and extract locally
                 for gzip_file in gzip_files:
                     # Extract S3 key from full URL for dataFiles, or use directly for reportKeys
@@ -115,7 +114,6 @@ class CUR2ReportHandler(BaseReportHandler):
                             s3_key = f"{base_path}/{gzip_file}"
                         else:
                             s3_key = gzip_file
-                    
                     logging.info(f"Attempting to extract GZIP file: {s3_key}")
                     try:
                         extracted_path = self._download_and_extract_gzip(s3_key)
@@ -127,7 +125,6 @@ class CUR2ReportHandler(BaseReportHandler):
                         # Don't add fallback S3 pattern - it will fail anyway
                         # Instead, try alternative approach or skip this file
                         continue
-                
                 # Handle direct CSV files
                 for csv_file in csv_files:
                     if csv_file.startswith('s3://'):
@@ -150,11 +147,9 @@ class CUR2ReportHandler(BaseReportHandler):
                 patterns.append(pattern)
 
         logging.info(f"Generated {len(patterns)} CSV patterns for CUR 2.0")
-        
         if not patterns:
             logging.error("No CSV patterns could be generated for CUR 2.0 manifests")
             raise Exception("No valid CSV files found in CUR 2.0 manifests")
-            
         return patterns
 
     def normalize_columns(self, manifest: Dict) -> List[str]:

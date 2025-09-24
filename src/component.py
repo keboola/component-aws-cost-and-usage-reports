@@ -215,7 +215,7 @@ class Component(ComponentBase):
         for manifest in manifests:
             # Skip if we've already processed this manifest (using assemblyId, reportId, or period as fallback)
             manifest_id = manifest.get(
-                "assemblyId", 
+                "assemblyId",
                 manifest.get("reportId", manifest.get("period", "unknown"))
             )
             if (
@@ -227,7 +227,7 @@ class Component(ComponentBase):
                 self.since_timestamp = manifest["last_modified"]
                 # Use assemblyId if available, otherwise fall back to reportId or period
                 self.latest_report_id = manifest.get(
-                    "assemblyId", 
+                    "assemblyId",
                     manifest.get("reportId", manifest.get("period", "unknown"))
                 )
 

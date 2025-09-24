@@ -60,7 +60,6 @@ class CUR1ReportHandler(BaseReportHandler):
                 )
                 manifest["period"] = parent_folder_name
                 manifest["format_version"] = "1.0"
-                
                 # Ensure assemblyId exists (fallback to reportId or generate one)
                 if "assemblyId" not in manifest:
                     manifest["assemblyId"] = manifest.get(
