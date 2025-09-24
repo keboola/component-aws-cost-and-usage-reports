@@ -61,15 +61,12 @@ class DuckDB:
         self.con = self._init_connection()
         self.con.execute("INSTALL httpfs;")
         self.con.execute("LOAD httpfs;")
-        self.con.execute(
-            f"SET s3_region='{self.config.aws_parameters.aws_region}';"
-        )
+        self.con.execute(f"SET s3_region='{self.config.aws_parameters.aws_region}';")
         self.con.execute(
             f"SET s3_access_key_id='{self.config.aws_parameters.api_key_id}';"
         )
         self.con.execute(
-            f"SET s3_secret_access_key='"
-            f"{self.config.aws_parameters.api_key_secret}';"
+            f"SET s3_secret_access_key='{self.config.aws_parameters.api_key_secret}';"
         )
 
     def load_csv_files_bulk(self, csv_patterns: List[str]) -> bool:
@@ -110,16 +107,12 @@ class DuckDB:
         try:
             columns = [
                 r[0]
-                for r in self.con.execute(
-                    f"DESCRIBE {table_name};"
-                ).fetchall()
+                for r in self.con.execute(f"DESCRIBE {table_name};").fetchall()
                 if r[0] != FILENAME_COLUMN  # filter out metadata column
             ]
             return columns
         except Exception as e:
-            logging.error(
-                f"Failed to get columns from table '{table_name}': {e}"
-            )
+            logging.error(f"Failed to get columns from table '{table_name}': {e}")
             return []
 
     def create_unified_view(
@@ -152,7 +145,6 @@ class DuckDB:
     def export_data_to_csv(self, output_path: str):
         """Export data from DuckDB table to CSV file."""
         self.con.execute(
-            f"COPY {UNIFIED_REPORTS_VIEW} TO '{output_path}' "
-            "(HEADER, DELIMITER ',');"
+            f"COPY {UNIFIED_REPORTS_VIEW} TO '{output_path}' (HEADER, DELIMITER ',');"
         )
         logging.info(f"Data exported to {output_path}")

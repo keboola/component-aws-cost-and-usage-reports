@@ -8,9 +8,9 @@ import pytz
 from keboola.component.base import ComponentBase
 
 from configuration import Configuration
-from aws_report_manager import AWSReportManager
 from duckdb_client import DuckDB, UNIFIED_REPORTS_VIEW, FILENAME_COLUMN
 from keboola.utils.header_normalizer import DictHeaderNormalizer
+from aws_report_handlers import ReportHandlerFactory
 
 
 class Component(ComponentBase):
@@ -38,16 +38,14 @@ class Component(ComponentBase):
             aws_secret_access_key=self.config.aws_parameters.api_key_secret,
         )
 
-        # Initialize specialized managers
-        self.aws_manager = AWSReportManager(
+        # Initialize report handler
+        self.report_handler = ReportHandlerFactory.create_handler(
             s3_client=s3_client,
             bucket=self.config.aws_parameters.s3_bucket,
             report_prefix=self.config.report_path_prefix,
         )
         self.duckdb_processor = DuckDB(self.config)
-        self.column_normalizer = DictHeaderNormalizer(
-            replace_dict={'/': '__'}
-        )
+        self.column_normalizer = DictHeaderNormalizer(replace_dict={"/": "__"})
 
         # Load state
         self.last_state = self.get_state_file()
@@ -82,8 +80,7 @@ class Component(ComponentBase):
             self._save_final_state()
 
             logging.info(
-                f"Extraction finished successfully at "
-                f"{datetime.now().isoformat()}."
+                f"Extraction finished successfully at {datetime.now().isoformat()}."
             )
 
         except Exception as e:
@@ -107,38 +104,32 @@ class Component(ComponentBase):
         last_file_timestamp = self.last_state.get("last_file_timestamp")
 
         if last_file_timestamp and self.config.since_last:
-            self.since_timestamp = datetime.fromisoformat(
-                last_file_timestamp
-            )
+            self.since_timestamp = datetime.fromisoformat(last_file_timestamp)
         else:
             self.since_timestamp = pytz.utc.localize(start_date)
 
         # Extract report name from prefix
-        self.report_name = self.aws_manager.get_report_name()
+        self.report_name = self.report_handler.get_report_name()
 
     def _discover_available_reports(self):
         """Discover and filter available reports from S3 based on
         configuration."""
         logging.info(
-            f"Discovering reports for '{self.report_name}' since "
-            f"{self.since_timestamp}"
+            f"Discovering reports for '{self.report_name}' since {self.since_timestamp}"
         )
 
         # Get all S3 objects matching our prefix
-        all_files = self.aws_manager.get_s3_objects(self.since_timestamp)
+        all_files = list(self.report_handler.get_s3_objects(self.since_timestamp))
 
         # Extract report manifests
-        report_manifests = self.aws_manager.retrieve_report_manifests(
+        report_manifests = self.report_handler.retrieve_manifests(
             all_files, self.report_name
         )
 
         # Filter manifests by date range if not in incremental mode
         if not self.config.since_last:
-            report_manifests = (
-                self.aws_manager.filter_manifests_by_date_range(
-                    report_manifests, self.since_timestamp,
-                    self.until_timestamp
-                )
+            report_manifests = self.report_handler.filter_by_date_range(
+                report_manifests, self.since_timestamp, self.until_timestamp
             )
 
         # Validate we found reports
@@ -150,25 +141,19 @@ class Component(ComponentBase):
             self.write_state_file(self.last_state)
             exit(0)
 
-        logging.info(
-            f"{len(report_manifests)} reports found and ready for "
-            "processing."
-        )
+        logging.info(f"{len(report_manifests)} reports found and ready for processing.")
         return report_manifests
 
     def _process_reports_unified_bulk(self, report_manifests):
         """New unified approach: extract all ZIP files in parallel, then
         bulk load everything."""
         logging.info(
-            f"Processing {len(report_manifests)} reports using unified "
-            "bulk approach..."
+            f"Processing {len(report_manifests)} reports using unified bulk approach..."
         )
 
         # Step 1: Prepare all CSV patterns (S3 direct + extracted from
         # ZIP files in parallel)
-        all_csv_patterns = self.aws_manager.prepare_all_csv_patterns(
-            report_manifests
-        )
+        all_csv_patterns = self.report_handler.get_csv_patterns(report_manifests)
 
         if not all_csv_patterns:
             logging.warning("No CSV files found to process")
@@ -191,9 +176,7 @@ class Component(ComponentBase):
             raise Exception("Failed to load CSV files in bulk")
 
         # Step 5: Get current columns from loaded data
-        current_columns = (
-            self.duckdb_processor.get_current_columns_from_table()
-        )
+        current_columns = self.duckdb_processor.get_current_columns_from_table()
 
         # Step 6: Create a simple unified view (all strings, no type
         # conversion)
@@ -230,26 +213,31 @@ class Component(ComponentBase):
     def _update_runtime_state_from_manifests(self, manifests):
         """Update runtime state with information from multiple manifests."""
         for manifest in manifests:
+            # Skip if we've already processed this manifest (using assemblyId, reportId, or period as fallback)
+            manifest_id = manifest.get(
+                "assemblyId", 
+                manifest.get("reportId", manifest.get("period", "unknown"))
+            )
             if (
                 self.config.since_last
-                and manifest["assemblyId"] == self.latest_report_id
+                and manifest_id == self.latest_report_id
             ):
                 continue
             if self.since_timestamp < manifest["last_modified"]:
                 self.since_timestamp = manifest["last_modified"]
-                self.latest_report_id = manifest["assemblyId"]
+                # Use assemblyId if available, otherwise fall back to reportId or period
+                self.latest_report_id = manifest.get(
+                    "assemblyId", 
+                    manifest.get("reportId", manifest.get("period", "unknown"))
+                )
 
     def _get_manifest_normalized_columns(self, manifest):
         """Extract and normalize column names from manifest metadata."""
-        # Build column names from manifest metadata
-        manifest_columns = [
-            col["category"] + "/" + col["name"] for col in manifest["columns"]
-        ]
+        # Get raw column names using the appropriate handler
+        raw_columns = self.report_handler.normalize_columns(manifest)
 
         # Normalize column names using HeaderNormalizer
-        normalized_columns = self.column_normalizer.normalize_header(
-            manifest_columns
-        )
+        normalized_columns = self.column_normalizer.normalize_header(raw_columns)
 
         # Remove duplicates - use set to remove duplicates then sort
         return sorted(list(set(normalized_columns)))
@@ -260,9 +248,7 @@ class Component(ComponentBase):
 
         for manifest in manifests:
             # Get normalized columns from this manifest
-            normalized_columns = self._get_manifest_normalized_columns(
-                manifest
-            )
+            normalized_columns = self._get_manifest_normalized_columns(manifest)
 
             # Merge with existing header
             norm_cols = set(normalized_columns)

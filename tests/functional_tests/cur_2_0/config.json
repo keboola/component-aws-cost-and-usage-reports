@@ -1,0 +1,30 @@
+{
+  "parameters": {
+    "aws_parameters": {
+      "api_key_id": "mock_access_key_id_v2",
+      "#api_key_secret": "mock_secret_access_key_v2",
+      "s3_bucket": "mock-cur-v2-bucket",
+      "aws_region": "us-east-1"
+    },
+    "report_path_prefix": "MockTestReportV2",
+    "min_date_since": "2024-09-01",
+    "max_date": "2024-09-30",
+    "since_last": false,
+    "loading_options": {
+      "incremental_output": 0,
+      "pkey": []
+    }
+  },
+  "storage": {
+    "input": {
+      "files": [],
+      "tables": []
+    },
+    "output": {
+      "files": [],
+      "tables": []
+    }
+  },
+  "image_parameters": {},
+  "authorization": {}
+}
