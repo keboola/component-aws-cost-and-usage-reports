@@ -92,6 +92,7 @@ class DuckDB:
                 FROM read_csv_auto(['{patterns_str}'],
                                    HEADER=TRUE,
                                    ALL_VARCHAR=TRUE,
+                                   NULLSTR=['null', 'NULL', 'None'],
                                    union_by_name=true,
                                    filename=true);
             """)
