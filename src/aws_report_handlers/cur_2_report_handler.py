@@ -15,7 +15,7 @@ import os
 import re
 import tempfile
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import Any
 
 from .base_handler import BaseReportHandler
 
@@ -26,9 +26,7 @@ class CUR2ReportHandler(BaseReportHandler):
     def __init__(self, s3_client, bucket: str, report_prefix: str):
         super().__init__(s3_client, bucket, report_prefix)
 
-    def retrieve_manifests(
-        self, s3_objects: List[Dict], report_name: str
-    ) -> List[Dict[str, Any]]:
+    def retrieve_manifests(self, s3_objects: list[dict], report_name: str) -> list[dict[str, Any]]:
         """
         Retrieve and parse CUR 2.0 manifest files from S3 objects.
 
@@ -46,9 +44,7 @@ class CUR2ReportHandler(BaseReportHandler):
                     # Extract billing period from path
                     period_match = re.search(r"BILLING_PERIOD=([^/]+)", key)
                     if not period_match:
-                        logging.warning(
-                            f"Could not extract billing period from key: {key}"
-                        )
+                        logging.warning(f"Could not extract billing period from key: {key}")
                         continue
 
                     period = period_match.group(1)
@@ -79,7 +75,7 @@ class CUR2ReportHandler(BaseReportHandler):
         logging.info(f"Found {len(manifests)} CUR 2.0 manifests")
         return manifests
 
-    def get_csv_patterns(self, manifests: List[Dict]) -> List[str]:
+    def get_csv_patterns(self, manifests: list[dict]) -> list[str]:
         """
         Generate CSV file patterns for CUR 2.0 manifests.
 
@@ -100,14 +96,14 @@ class CUR2ReportHandler(BaseReportHandler):
 
             if files_to_process:
                 # Check if files are GZIP - if so, download and extract them locally
-                gzip_files = [f for f in files_to_process if f.endswith('.gz')]
-                csv_files = [f for f in files_to_process if f.endswith('.csv')]
+                gzip_files = [f for f in files_to_process if f.endswith(".gz")]
+                csv_files = [f for f in files_to_process if f.endswith(".csv")]
                 # Handle GZIP files - download and extract locally
                 for gzip_file in gzip_files:
                     # Extract S3 key from full URL for dataFiles, or use directly for reportKeys
-                    if gzip_file.startswith('s3://'):
+                    if gzip_file.startswith("s3://"):
                         # dataFiles format: s3://bucket/path/file.gz
-                        s3_key = gzip_file.replace(f's3://{self.bucket}/', '')
+                        s3_key = gzip_file.replace(f"s3://{self.bucket}/", "")
                     else:
                         # reportKeys format: relative path
                         if base_path:
@@ -121,13 +117,15 @@ class CUR2ReportHandler(BaseReportHandler):
                         logging.info(f"Successfully extracted {s3_key} to {extracted_path}")
                     except Exception as e:
                         logging.error(f"Failed to extract GZIP file {s3_key}: {e}")
-                        logging.warning(f"Falling back to S3 pattern for {s3_key} (this may fail with DuckDB)")
+                        logging.warning(
+                            f"Falling back to S3 pattern for {s3_key} (this may fail with DuckDB)"
+                        )
                         # Don't add fallback S3 pattern - it will fail anyway
                         # Instead, try alternative approach or skip this file
                         continue
                 # Handle direct CSV files
                 for csv_file in csv_files:
-                    if csv_file.startswith('s3://'):
+                    if csv_file.startswith("s3://"):
                         # Use the S3 URL directly
                         patterns.append(csv_file)
                     else:
@@ -141,7 +139,9 @@ class CUR2ReportHandler(BaseReportHandler):
                 # Fallback to wildcard pattern if no reportKeys
                 period = manifest["period"]
                 if base_path:
-                    pattern = f"s3://{self.bucket}/{base_path}/data/BILLING_PERIOD={period}/*.csv.gz"
+                    pattern = (
+                        f"s3://{self.bucket}/{base_path}/data/BILLING_PERIOD={period}/*.csv.gz"
+                    )
                 else:
                     pattern = f"s3://{self.bucket}/data/BILLING_PERIOD={period}/*.csv.gz"
                 patterns.append(pattern)
@@ -149,10 +149,10 @@ class CUR2ReportHandler(BaseReportHandler):
         logging.info(f"Generated {len(patterns)} CSV patterns for CUR 2.0")
         if not patterns:
             logging.error("No CSV patterns could be generated for CUR 2.0 manifests")
-            raise Exception("No valid CSV files found in CUR 2.0 manifests")
+            raise ValueError("No valid CSV files found in CUR 2.0 manifests")
         return patterns
 
-    def normalize_columns(self, manifest: Dict) -> List[str]:
+    def normalize_columns(self, manifest: dict) -> list[str]:
         """
         Normalize column names for CUR 2.0 format.
 
@@ -164,8 +164,8 @@ class CUR2ReportHandler(BaseReportHandler):
         return manifest_columns
 
     def filter_by_date_range(
-        self, manifests: List[Dict], since_timestamp, until_timestamp
-    ) -> List[Dict]:
+        self, manifests: list[dict], since_timestamp, until_timestamp
+    ) -> list[dict]:
         """
         Filter CUR 2.0 manifests by date range.
 
@@ -229,9 +229,7 @@ class CUR2ReportHandler(BaseReportHandler):
             logging.error(f"Failed to extract GZIP file {s3_key}: {e}")
             raise
 
-    def _extract_report_folder(
-        self, manifest_key: str, period: str, manifest_pattern: str
-    ) -> str:
+    def _extract_report_folder(self, manifest_key: str, period: str, manifest_pattern: str) -> str:
         """
         Extract the base report folder from manifest key.
 
@@ -277,15 +275,11 @@ class CUR2ReportHandler(BaseReportHandler):
                 return datetime.strptime(period + "-01-01", "%Y-%m-%d").date()
             elif "W" in period:
                 # Weekly format: YYYY-WXX (not fully supported yet)
-                logging.warning(
-                    f"Weekly billing period format not fully supported: {period}"
-                )
+                logging.warning(f"Weekly billing period format not fully supported: {period}")
                 # Try to extract year and approximate
                 year_match = re.match(r"^(\d{4})", period)
                 if year_match:
-                    return datetime.strptime(
-                        year_match.group(1) + "-01-01", "%Y-%m-%d"
-                    ).date()
+                    return datetime.strptime(year_match.group(1) + "-01-01", "%Y-%m-%d").date()
 
         except ValueError as e:
             logging.error(f"Failed to parse billing period '{period}': {e}")

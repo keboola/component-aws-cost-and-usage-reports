@@ -19,6 +19,7 @@ dependencies = [
     "regex>=2024.0.0",
     "pydantic>=2.6.0",
     "flake8>=7.3.0",
+    "ruff>=0.8.0",
 ]
 
 [project.optional-dependencies]
@@ -27,3 +28,11 @@ test = [
     "mock>=4.0.0",
     "freezegun>=1.2.0",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

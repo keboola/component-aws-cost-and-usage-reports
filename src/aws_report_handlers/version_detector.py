@@ -2,16 +2,16 @@
 Version detector for AWS Cost and Usage Reports.
 """
 
-import re
 import logging
-from typing import List, Dict
+import re
+from typing import Any
 
 
 class ReportVersionDetector:
     """Detects AWS Cost and Usage Report version from S3 structure."""
 
     @staticmethod
-    def detect_version(s3_objects: List[Dict]) -> str:
+    def detect_version(s3_objects: list[dict]) -> str:
         """
         Detect CUR report version from S3 object paths.
 
@@ -44,9 +44,7 @@ class ReportVersionDetector:
             return "modern"
 
         # Legacy format indicators
-        has_date_pattern = any(
-            re.search(r"\d{8}-\d{8}", obj["Key"]) for obj in s3_objects
-        )
+        has_date_pattern = any(re.search(r"\d{8}-\d{8}", obj["Key"]) for obj in s3_objects)
         has_zip_files = any(obj["Key"].endswith(".csv.zip") for obj in s3_objects)
 
         if has_date_pattern or has_zip_files:
@@ -62,7 +60,7 @@ class ReportVersionDetector:
         return "legacy"
 
     @staticmethod
-    def get_version_details(s3_objects: List[Dict]) -> Dict[str, any]:
+    def get_version_details(s3_objects: list[dict]) -> dict[str, Any]:
         """
         Get detailed information about detected CUR version.
 
@@ -90,12 +88,8 @@ class ReportVersionDetector:
             details["billing_periods"] = sorted(list(billing_periods))
 
             # Check for GZIP files
-            details["has_gzip"] = any(
-                obj["Key"].endswith(".csv.gz") for obj in s3_objects
-            )
-            details["has_metadata_folder"] = any(
-                "/metadata/" in obj["Key"] for obj in s3_objects
-            )
+            details["has_gzip"] = any(obj["Key"].endswith(".csv.gz") for obj in s3_objects)
+            details["has_metadata_folder"] = any("/metadata/" in obj["Key"] for obj in s3_objects)
 
         else:  # legacy
             # Extract date patterns
@@ -107,8 +101,6 @@ class ReportVersionDetector:
             details["date_patterns"] = sorted(list(date_patterns))
 
             # Check for ZIP files
-            details["has_zip"] = any(
-                obj["Key"].endswith(".csv.zip") for obj in s3_objects
-            )
+            details["has_zip"] = any(obj["Key"].endswith(".csv.zip") for obj in s3_objects)
 
         return details

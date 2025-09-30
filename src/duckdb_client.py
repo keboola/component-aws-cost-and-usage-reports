@@ -1,6 +1,5 @@
 import logging
 import os
-from typing import List
 
 import duckdb
 from duckdb import DuckDBPyConnection
@@ -62,14 +61,10 @@ class DuckDB:
         self.con.execute("INSTALL httpfs;")
         self.con.execute("LOAD httpfs;")
         self.con.execute(f"SET s3_region='{self.config.aws_parameters.aws_region}';")
-        self.con.execute(
-            f"SET s3_access_key_id='{self.config.aws_parameters.api_key_id}';"
-        )
-        self.con.execute(
-            f"SET s3_secret_access_key='{self.config.aws_parameters.api_key_secret}';"
-        )
+        self.con.execute(f"SET s3_access_key_id='{self.config.aws_parameters.api_key_id}';")
+        self.con.execute(f"SET s3_secret_access_key='{self.config.aws_parameters.api_key_secret}';")
 
-    def load_csv_files_bulk(self, csv_patterns: List[str]) -> bool:
+    def load_csv_files_bulk(self, csv_patterns: list[str]) -> bool:
         """Load CSV files from mixed patterns (S3 and local) using DuckDB
         bulk loading."""
         if not csv_patterns:
@@ -81,8 +76,7 @@ class DuckDB:
         local_count = len(csv_patterns) - s3_count
 
         logging.info(
-            f"Loading {len(csv_patterns)} CSV files ({s3_count} from S3, "
-            f"{local_count} local)..."
+            f"Loading {len(csv_patterns)} CSV files ({s3_count} from S3, {local_count} local)..."
         )
 
         try:
@@ -101,9 +95,7 @@ class DuckDB:
             logging.error(f"Failed to load CSV files bulk: {e}")
             return False
 
-    def get_current_columns_from_table(
-        self, table_name: str = RAW_REPORTS_TABLE
-    ) -> List[str]:
+    def get_current_columns_from_table(self, table_name: str = RAW_REPORTS_TABLE) -> list[str]:
         """Get current columns from DuckDB table."""
         try:
             columns = [
@@ -116,9 +108,7 @@ class DuckDB:
             logging.error(f"Failed to get columns from table '{table_name}': {e}")
             return []
 
-    def create_unified_view(
-        self, final_columns: List[str], current_columns: List[str]
-    ) -> bool:
+    def create_unified_view(self, final_columns: list[str], current_columns: list[str]) -> bool:
         """Create a unified view with all columns."""
         select_parts = []
 
@@ -145,7 +135,5 @@ class DuckDB:
 
     def export_data_to_csv(self, output_path: str):
         """Export data from DuckDB table to CSV file."""
-        self.con.execute(
-            f"COPY {UNIFIED_REPORTS_VIEW} TO '{output_path}' (HEADER, DELIMITER ',');"
-        )
+        self.con.execute(f"COPY {UNIFIED_REPORTS_VIEW} TO '{output_path}' (HEADER, DELIMITER ',');")
         logging.info(f"Data exported to {output_path}")

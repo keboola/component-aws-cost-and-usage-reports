@@ -1,8 +1,8 @@
 import logging
 from datetime import datetime
-from typing import Optional, List
-from pydantic import BaseModel, Field, ValidationError, model_validator
+
 from keboola.component.exceptions import UserException
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 
 class AWSParameters(BaseModel):
@@ -18,7 +18,7 @@ class LoadingOptions(BaseModel):
     """Data loading configuration."""
 
     incremental_output: int = Field(default=0, ge=0, le=1)  # 0=Full Load, 1=Incremental
-    pkey: List[str] = Field(default=[])  # Primary key columns
+    pkey: list[str] = Field(default=[])  # Primary key columns
 
     @property
     def incremental_output_bool(self) -> bool:
@@ -30,7 +30,7 @@ class Configuration(BaseModel):
 
     aws_parameters: AWSParameters
     report_path_prefix: str
-    min_date_since: Optional[str] = None
+    min_date_since: str | None = None
     max_date: str = "now"
     since_last: bool = True
     loading_options: LoadingOptions = Field(default_factory=LoadingOptions)
@@ -81,9 +81,5 @@ class Configuration(BaseModel):
                     location = ".".join(str(x) for x in err["loc"])
                 else:
                     location = "unknown"
-                error_messages.append(
-                    f"{location}: {err.get('msg', 'Validation error')}"
-                )
-            raise UserException(
-                f"Configuration validation error: {', '.join(error_messages)}"
-            )
+                error_messages.append(f"{location}: {err.get('msg', 'Validation error')}")
+            raise UserException(f"Configuration validation error: {', '.join(error_messages)}")

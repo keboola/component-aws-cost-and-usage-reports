@@ -6,11 +6,11 @@ from datetime import datetime
 import boto3
 import pytz
 from keboola.component.base import ComponentBase
-
-from configuration import Configuration
-from duckdb_client import DuckDB, UNIFIED_REPORTS_VIEW, FILENAME_COLUMN
 from keboola.utils.header_normalizer import DictHeaderNormalizer
+
 from aws_report_handlers import ReportHandlerFactory
+from configuration import Configuration
+from duckdb_client import FILENAME_COLUMN, UNIFIED_REPORTS_VIEW, DuckDB
 
 
 class Component(ComponentBase):
@@ -79,9 +79,7 @@ class Component(ComponentBase):
             # Step 5: Save final state
             self._save_final_state()
 
-            logging.info(
-                f"Extraction finished successfully at {datetime.now().isoformat()}."
-            )
+            logging.info(f"Extraction finished successfully at {datetime.now().isoformat()}.")
 
         except Exception as e:
             logging.error(f"Report extraction failed: {e}")
@@ -93,8 +91,7 @@ class Component(ComponentBase):
         start_date = self.config.start_datetime
         end_date = self.config.end_datetime
         logging.info(
-            f"Date range: {start_date.strftime('%Y-%m-%d')} to "
-            f"{end_date.strftime('%Y-%m-%d')}"
+            f"Date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}"
         )
 
         # Convert to UTC timestamps
@@ -114,17 +111,13 @@ class Component(ComponentBase):
     def _discover_available_reports(self):
         """Discover and filter available reports from S3 based on
         configuration."""
-        logging.info(
-            f"Discovering reports for '{self.report_name}' since {self.since_timestamp}"
-        )
+        logging.info(f"Discovering reports for '{self.report_name}' since {self.since_timestamp}")
 
         # Get all S3 objects matching our prefix
         all_files = list(self.report_handler.get_s3_objects(self.since_timestamp))
 
         # Extract report manifests
-        report_manifests = self.report_handler.retrieve_manifests(
-            all_files, self.report_name
-        )
+        report_manifests = self.report_handler.retrieve_manifests(all_files, self.report_name)
 
         # Filter manifests by date range if not in incremental mode
         if not self.config.since_last:
@@ -147,9 +140,7 @@ class Component(ComponentBase):
     def _process_reports_unified_bulk(self, report_manifests):
         """New unified approach: extract all ZIP files in parallel, then
         bulk load everything."""
-        logging.info(
-            f"Processing {len(report_manifests)} reports using unified bulk approach..."
-        )
+        logging.info(f"Processing {len(report_manifests)} reports using unified bulk approach...")
 
         # Step 1: Prepare all CSV patterns (S3 direct + extracted from
         # ZIP files in parallel)
@@ -163,9 +154,7 @@ class Component(ComponentBase):
         self._update_runtime_state_from_manifests(report_manifests)
 
         # Step 3: Determine final column set for output table
-        final_columns = self._get_max_header_normalized(
-            report_manifests, self.last_header
-        )
+        final_columns = self._get_max_header_normalized(report_manifests, self.last_header)
         self.last_header = final_columns
 
         # Step 4: Bulk load all CSV files into DuckDB
@@ -180,20 +169,15 @@ class Component(ComponentBase):
 
         # Step 6: Create a simple unified view (all strings, no type
         # conversion)
-        if not self.duckdb_processor.create_unified_view(
-            final_columns, current_columns
-        ):
+        if not self.duckdb_processor.create_unified_view(final_columns, current_columns):
             raise Exception("Failed to create unified view")
 
         # Step 7: Export the data
-        self.export_output_path = os.path.join(
-            self.tables_out_path, f"{self.report_name}.csv"
-        )
+        self.export_output_path = os.path.join(self.tables_out_path, f"{self.report_name}.csv")
         self.duckdb_processor.export_data_to_csv(self.export_output_path)
 
         logging.info(
-            f"Successfully processed {len(all_csv_patterns)} files using "
-            "unified bulk approach"
+            f"Successfully processed {len(all_csv_patterns)} files using unified bulk approach"
         )
 
     def _save_final_state(self):
@@ -215,20 +199,15 @@ class Component(ComponentBase):
         for manifest in manifests:
             # Skip if we've already processed this manifest (using assemblyId, reportId, or period as fallback)
             manifest_id = manifest.get(
-                "assemblyId",
-                manifest.get("reportId", manifest.get("period", "unknown"))
+                "assemblyId", manifest.get("reportId", manifest.get("period", "unknown"))
             )
-            if (
-                self.config.since_last
-                and manifest_id == self.latest_report_id
-            ):
+            if self.config.since_last and manifest_id == self.latest_report_id:
                 continue
             if self.since_timestamp < manifest["last_modified"]:
                 self.since_timestamp = manifest["last_modified"]
                 # Use assemblyId if available, otherwise fall back to reportId or period
                 self.latest_report_id = manifest.get(
-                    "assemblyId",
-                    manifest.get("reportId", manifest.get("period", "unknown"))
+                    "assemblyId", manifest.get("reportId", manifest.get("period", "unknown"))
                 )
 
     def _get_manifest_normalized_columns(self, manifest):
@@ -267,9 +246,7 @@ class Component(ComponentBase):
         pkey = self.config.loading_options.pkey
 
         # Get column names from DuckDB table
-        columns = self.duckdb_processor.get_current_columns_from_table(
-            UNIFIED_REPORTS_VIEW
-        )
+        columns = self.duckdb_processor.get_current_columns_from_table(UNIFIED_REPORTS_VIEW)
         # Filter out metadata columns
         schema_columns = [col for col in columns if col != FILENAME_COLUMN]
 

@@ -15,7 +15,7 @@ import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import Any
 
 from .base_handler import BaseReportHandler
 
@@ -26,9 +26,7 @@ class CUR1ReportHandler(BaseReportHandler):
     def __init__(self, s3_client, bucket: str, report_prefix: str):
         super().__init__(s3_client, bucket, report_prefix)
 
-    def retrieve_manifests(
-        self, s3_objects: List[Dict], report_name: str
-    ) -> List[Dict[str, Any]]:
+    def retrieve_manifests(self, s3_objects: list[dict], report_name: str) -> list[dict[str, Any]]:
         """
         Retrieve and parse CUR 1.0 manifest files from S3 objects.
 
@@ -43,9 +41,7 @@ class CUR1ReportHandler(BaseReportHandler):
             parent_folder_name = s3_object["Key"].split("/")[-2]
 
             # Parse billing period from folder name (YYYYMMDD-YYYYMMDD format)
-            start_date, end_date = self._parse_billing_period_from_folder_name(
-                parent_folder_name
-            )
+            start_date, end_date = self._parse_billing_period_from_folder_name(parent_folder_name)
 
             # Process only root-level manifest files for valid billing periods
             if start_date and object_name == manifest_file_pattern:
@@ -63,7 +59,8 @@ class CUR1ReportHandler(BaseReportHandler):
                 # Ensure assemblyId exists (fallback to reportId or generate one)
                 if "assemblyId" not in manifest:
                     manifest["assemblyId"] = manifest.get(
-                        "reportId", f"cur1-{parent_folder_name}-{manifest.get('account', 'unknown')}"
+                        "reportId",
+                        f"cur1-{parent_folder_name}-{manifest.get('account', 'unknown')}",
                     )
 
                 manifests.append(manifest)
@@ -71,7 +68,7 @@ class CUR1ReportHandler(BaseReportHandler):
         logging.info(f"Found {len(manifests)} CUR 1.0 manifests")
         return manifests
 
-    def get_csv_patterns(self, manifests: List[Dict]) -> List[str]:
+    def get_csv_patterns(self, manifests: list[dict]) -> list[str]:
         """
         Generate CSV file patterns for CUR 1.0 manifests.
 
@@ -80,9 +77,7 @@ class CUR1ReportHandler(BaseReportHandler):
         patterns = []
 
         # Separate ZIP and CSV manifests for different processing
-        csv_manifests = [
-            m for m in manifests if not self._manifest_contains_zip_files(m)
-        ]
+        csv_manifests = [m for m in manifests if not self._manifest_contains_zip_files(m)]
         zip_manifests = [m for m in manifests if self._manifest_contains_zip_files(m)]
 
         # Process direct CSV patterns
@@ -99,7 +94,7 @@ class CUR1ReportHandler(BaseReportHandler):
         logging.info(f"Generated {len(patterns)} CSV patterns for CUR 1.0")
         return patterns
 
-    def normalize_columns(self, manifest: Dict) -> List[str]:
+    def normalize_columns(self, manifest: dict) -> list[str]:
         """
         Normalize column names for CUR 1.0 format.
 
@@ -113,8 +108,8 @@ class CUR1ReportHandler(BaseReportHandler):
         return manifest_columns
 
     def filter_by_date_range(
-        self, manifests: List[Dict], since_timestamp, until_timestamp
-    ) -> List[Dict]:
+        self, manifests: list[dict], since_timestamp, until_timestamp
+    ) -> list[dict]:
         """
         Filter CUR 1.0 manifests by date range.
 
@@ -140,9 +135,7 @@ class CUR1ReportHandler(BaseReportHandler):
                 ):
                     filtered_manifests.append(manifest)
             except (ValueError, TypeError):
-                logging.warning(
-                    f"Could not parse billing period for manifest: {billing_period}"
-                )
+                logging.warning(f"Could not parse billing period for manifest: {billing_period}")
                 continue
 
         logging.info(
@@ -166,12 +159,10 @@ class CUR1ReportHandler(BaseReportHandler):
 
         except ValueError:
             # Not a valid date format
-            logging.debug(
-                f"Could not parse billing period from folder name: {folder_name}"
-            )
+            logging.debug(f"Could not parse billing period from folder name: {folder_name}")
             return None, None
 
-    def _manifest_contains_zip_files(self, manifest: Dict[str, Any]) -> bool:
+    def _manifest_contains_zip_files(self, manifest: dict[str, Any]) -> bool:
         """Check if CUR 1.0 manifest contains ZIP files."""
         return (
             manifest.get("reportKeys")
@@ -179,7 +170,7 @@ class CUR1ReportHandler(BaseReportHandler):
             and manifest["reportKeys"][0].endswith("zip")
         )
 
-    def _extract_all_zip_files_parallel(self, zip_manifests: List[Dict]) -> List[str]:
+    def _extract_all_zip_files_parallel(self, zip_manifests: list[dict]) -> list[str]:
         """Extract all ZIP files in parallel and return paths to extracted CSV files."""
         logging.info(f"Extracting {len(zip_manifests)} ZIP reports in parallel...")
 
@@ -190,7 +181,9 @@ class CUR1ReportHandler(BaseReportHandler):
                     # Handle special path syntax for S3 keys
                     key_parts = chunk_key.split("/")
                     if "//" in manifest["report_folder"]:
-                        normalized_key = f"{manifest['report_folder']}/{key_parts[-2]}/{key_parts[-1]}"
+                        normalized_key = (
+                            f"{manifest['report_folder']}/{key_parts[-2]}/{key_parts[-1]}"
+                        )
                     else:
                         normalized_key = chunk_key
                     zip_tasks.append(normalized_key)

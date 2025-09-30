@@ -3,13 +3,13 @@ Factory for creating appropriate report format handlers.
 """
 
 import logging
-from typing import List, Dict
+
 import boto3
 
-from .version_detector import ReportVersionDetector
+from .base_handler import BaseReportHandler
 from .cur_1_report_handler import CUR1ReportHandler
 from .cur_2_report_handler import CUR2ReportHandler
-from .base_handler import BaseReportHandler
+from .version_detector import ReportVersionDetector
 
 
 class ReportHandlerFactory:
@@ -17,7 +17,10 @@ class ReportHandlerFactory:
 
     @staticmethod
     def create_handler(
-        s3_client: boto3.client, bucket: str, report_prefix: str, s3_objects: List[Dict] = None
+        s3_client: boto3.client,
+        bucket: str,
+        report_prefix: str,
+        s3_objects: list[dict] | None = None,
     ) -> BaseReportHandler:
         """
         Create handler based on detected report format.
@@ -48,7 +51,7 @@ class ReportHandlerFactory:
         return handler
 
     @staticmethod
-    def get_supported_formats() -> List[str]:
+    def get_supported_formats() -> list[str]:
         """
         Get list of supported report formats.
 
@@ -58,7 +61,7 @@ class ReportHandlerFactory:
         return ["legacy", "modern"]
 
     @staticmethod
-    def get_format_info() -> Dict[str, str]:
+    def get_format_info() -> dict[str, str]:
         """
         Get information about supported formats.
 

@@ -2,10 +2,11 @@
 Base abstract class for AWS Cost and Usage Report handlers.
 """
 
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any
-import boto3
 import logging
+from abc import ABC, abstractmethod
+from typing import Any
+
+import boto3
 from botocore.exceptions import ClientError
 
 
@@ -61,9 +62,7 @@ class BaseReportHandler(ABC):
                     yield obj
 
     @abstractmethod
-    def retrieve_manifests(
-        self, s3_objects: List[Dict], report_name: str
-    ) -> List[Dict[str, Any]]:
+    def retrieve_manifests(self, s3_objects: list[dict], report_name: str) -> list[dict[str, Any]]:
         """
         Retrieve and parse manifests from S3 objects.
 
@@ -77,7 +76,7 @@ class BaseReportHandler(ABC):
         pass
 
     @abstractmethod
-    def get_csv_patterns(self, manifests: List[Dict]) -> List[str]:
+    def get_csv_patterns(self, manifests: list[dict]) -> list[str]:
         """
         Generate CSV file patterns from manifests.
 
@@ -90,7 +89,7 @@ class BaseReportHandler(ABC):
         pass
 
     @abstractmethod
-    def normalize_columns(self, manifest: Dict) -> List[str]:
+    def normalize_columns(self, manifest: dict) -> list[str]:
         """
         Normalize column names from manifest.
 
@@ -104,8 +103,8 @@ class BaseReportHandler(ABC):
 
     @abstractmethod
     def filter_by_date_range(
-        self, manifests: List[Dict], since_timestamp, until_timestamp
-    ) -> List[Dict]:
+        self, manifests: list[dict], since_timestamp, until_timestamp
+    ) -> list[dict]:
         """
         Filter manifests by date range.
 
