@@ -28,9 +28,7 @@ class ReportVersionDetector:
         # Primary indicator: BILLING_PERIOD= is specific to CUR 2.0
         has_billing_period = any("BILLING_PERIOD=" in obj["Key"] for obj in s3_objects)
         if has_billing_period:
-            logging.info(
-                "Detected modern report format (CUR 2.0) - found BILLING_PERIOD= partitioning"
-            )
+            logging.info("Detected modern report format (CUR 2.0) - found BILLING_PERIOD= partitioning")
             return "modern"
 
         # Secondary indicators for additional validation
@@ -38,9 +36,7 @@ class ReportVersionDetector:
         has_gzip_files = any(obj["Key"].endswith(".csv.gz") for obj in s3_objects)
 
         if has_metadata_folder or has_gzip_files:
-            logging.info(
-                "Detected modern report format (CUR 2.0) - found metadata folder or GZIP files"
-            )
+            logging.info("Detected modern report format (CUR 2.0) - found metadata folder or GZIP files")
             return "modern"
 
         # Legacy format indicators
@@ -48,15 +44,11 @@ class ReportVersionDetector:
         has_zip_files = any(obj["Key"].endswith(".csv.zip") for obj in s3_objects)
 
         if has_date_pattern or has_zip_files:
-            logging.info(
-                "Detected legacy report format (CUR 1.0) - found date patterns or ZIP files"
-            )
+            logging.info("Detected legacy report format (CUR 1.0) - found date patterns or ZIP files")
             return "legacy"
 
         # Default fallback
-        logging.warning(
-            "Could not determine CUR version from S3 structure, defaulting to legacy (CUR 1.0)"
-        )
+        logging.warning("Could not determine CUR version from S3 structure, defaulting to legacy (CUR 1.0)")
         return "legacy"
 
     @staticmethod

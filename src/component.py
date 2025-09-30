@@ -53,8 +53,8 @@ class Component(ComponentBase):
         self.last_header = self.last_state.get("report_header", [])
 
         # Runtime state (will be set during execution)
-        self.since_timestamp = None
-        self.until_timestamp = None
+        self.since_dt = None
+        self.until_dt = None
         self.report_name = None
         self.latest_report_id = self.last_report_id
         self.column_types = {}
@@ -90,20 +90,18 @@ class Component(ComponentBase):
         # Get date range from configuration properties
         start_date = self.config.start_datetime
         end_date = self.config.end_datetime
-        logging.info(
-            f"Date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}"
-        )
+        logging.info(f"Date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
 
         # Convert to UTC timestamps
-        self.until_timestamp = pytz.utc.localize(end_date)
+        self.until_dt = pytz.utc.localize(end_date)
 
         # Determine starting timestamp based on incremental mode
         last_file_timestamp = self.last_state.get("last_file_timestamp")
 
         if last_file_timestamp and self.config.since_last:
-            self.since_timestamp = datetime.fromisoformat(last_file_timestamp)
+            self.since_dt = datetime.fromisoformat(last_file_timestamp)
         else:
-            self.since_timestamp = pytz.utc.localize(start_date)
+            self.since_dt = pytz.utc.localize(start_date)
 
         # Extract report name from prefix
         self.report_name = self.report_handler.get_report_name()
@@ -111,26 +109,21 @@ class Component(ComponentBase):
     def _discover_available_reports(self):
         """Discover and filter available reports from S3 based on
         configuration."""
-        logging.info(f"Discovering reports for '{self.report_name}' since {self.since_timestamp}")
+        logging.info(f"Discovering reports for '{self.report_name}' since {self.since_dt}")
 
         # Get all S3 objects matching our prefix
-        all_files = list(self.report_handler.get_s3_objects(self.since_timestamp))
+        all_files = list(self.report_handler.get_s3_objects(self.since_dt))
 
         # Extract report manifests
         report_manifests = self.report_handler.retrieve_manifests(all_files, self.report_name)
 
         # Filter manifests by date range if not in incremental mode
         if not self.config.since_last:
-            report_manifests = self.report_handler.filter_by_date_range(
-                report_manifests, self.since_timestamp, self.until_timestamp
-            )
+            report_manifests = self.report_handler.filter_by_date_range(report_manifests, self.since_dt, self.until_dt)
 
         # Validate we found reports
         if not report_manifests:
-            logging.warning(
-                "No reports found for the specified period. Check your "
-                "prefix setting and date range."
-            )
+            logging.warning("No reports found for the specified period. Check your prefix setting and date range.")
             self.write_state_file(self.last_state)
             exit(0)
 
@@ -176,9 +169,7 @@ class Component(ComponentBase):
         self.export_output_path = os.path.join(self.tables_out_path, f"{self.report_name}.csv")
         self.duckdb_processor.export_data_to_csv(self.export_output_path)
 
-        logging.info(
-            f"Successfully processed {len(all_csv_patterns)} files using unified bulk approach"
-        )
+        logging.info(f"Successfully processed {len(all_csv_patterns)} files using unified bulk approach")
 
     def _save_final_state(self):
         """Save the final execution state for future incremental runs."""
@@ -186,7 +177,7 @@ class Component(ComponentBase):
         # Write state file
         self.write_state_file(
             {
-                "last_file_timestamp": self.since_timestamp.isoformat(),
+                "last_file_timestamp": self.since_dt.isoformat(),
                 "last_report_id": self.latest_report_id,
                 "report_header": self.last_header,
             }
@@ -198,13 +189,11 @@ class Component(ComponentBase):
         """Update runtime state with information from multiple manifests."""
         for manifest in manifests:
             # Skip if we've already processed this manifest (using assemblyId, reportId, or period as fallback)
-            manifest_id = manifest.get(
-                "assemblyId", manifest.get("reportId", manifest.get("period", "unknown"))
-            )
+            manifest_id = manifest.get("assemblyId", manifest.get("reportId", manifest.get("period", "unknown")))
             if self.config.since_last and manifest_id == self.latest_report_id:
                 continue
-            if self.since_timestamp < manifest["last_modified"]:
-                self.since_timestamp = manifest["last_modified"]
+            if self.since_dt < manifest["last_modified"]:
+                self.since_dt = manifest["last_modified"]
                 # Use assemblyId if available, otherwise fall back to reportId or period
                 self.latest_report_id = manifest.get(
                     "assemblyId", manifest.get("reportId", manifest.get("period", "unknown"))

@@ -25,9 +25,7 @@ class DuckDB:
         self.con = None
 
     @staticmethod
-    def _init_connection(
-        threads: int = 4, max_memory: int = 1024, db_path: str = ":memory:"
-    ) -> DuckDBPyConnection:
+    def _init_connection(threads: int = 4, max_memory: int = 1024, db_path: str = ":memory:") -> DuckDBPyConnection:
         """
         Returns connection to temporary DuckDB database with advanced
         optimizations. DuckDB supports thread-safe access to a single
@@ -75,9 +73,7 @@ class DuckDB:
         s3_count = sum(1 for p in csv_patterns if p.startswith("s3://"))
         local_count = len(csv_patterns) - s3_count
 
-        logging.info(
-            f"Loading {len(csv_patterns)} CSV files ({s3_count} from S3, {local_count} local)..."
-        )
+        logging.info(f"Loading {len(csv_patterns)} CSV files ({s3_count} from S3, {local_count} local)...")
 
         try:
             self.con.execute(f"""

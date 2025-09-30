@@ -4,6 +4,7 @@ Base abstract class for AWS Cost and Usage Report handlers.
 
 import logging
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any
 
 import boto3
@@ -30,7 +31,7 @@ class BaseReportHandler(ABC):
         """Extract clean report name from the configured prefix."""
         return self.report_prefix.split("/")[-1].replace("*", "")
 
-    def get_s3_objects(self, since_timestamp=None, until_timestamp=None):
+    def get_s3_objects(self, since_dt=None, until_dt=None):
         """Get S3 objects matching the prefix and optional date filters."""
         prefix = self.report_prefix
         if prefix.endswith("*"):
@@ -54,9 +55,9 @@ class BaseReportHandler(ABC):
         for page in pages:
             for obj in page.get("Contents", []):
                 key = obj["Key"]
-                if since_timestamp and obj["LastModified"] <= since_timestamp:
+                if since_dt and obj["LastModified"] <= since_dt:
                     continue
-                if until_timestamp and obj["LastModified"] > until_timestamp:
+                if until_dt and obj["LastModified"] > until_dt:
                     continue
                 if (is_wildcard and key.startswith(prefix)) or key == prefix:
                     yield obj
@@ -102,19 +103,17 @@ class BaseReportHandler(ABC):
         pass
 
     @abstractmethod
-    def filter_by_date_range(
-        self, manifests: list[dict], since_timestamp, until_timestamp
-    ) -> list[dict]:
+    def filter_by_date_range(self, manifests: list[dict], since_dt: datetime, until_dt: datetime) -> list[dict]:
         """
         Filter manifests by date range.
 
         Args:
             manifests: List of manifest dictionaries
-            since_timestamp: Start timestamp
-            until_timestamp: End timestamp
+            since_dt: Start datetime (datetime with timezone)
+            until_dt: End datetime (datetime with timezone)
 
         Returns:
-            Filtered list of manifests
+            Filtered list of manifests that overlap with the date range
         """
         pass
 

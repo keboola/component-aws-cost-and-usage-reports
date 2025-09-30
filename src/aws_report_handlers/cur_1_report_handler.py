@@ -51,9 +51,7 @@ class CUR1ReportHandler(BaseReportHandler):
 
                 # Enrich with additional metadata for processing
                 manifest["last_modified"] = s3_object["LastModified"]
-                manifest["report_folder"] = s3_object["Key"].replace(
-                    f"/{manifest_file_pattern}", ""
-                )
+                manifest["report_folder"] = s3_object["Key"].replace(f"/{manifest_file_pattern}", "")
                 manifest["period"] = parent_folder_name
                 manifest["format_version"] = "1.0"
                 # Ensure assemblyId exists (fallback to reportId or generate one)
@@ -101,46 +99,62 @@ class CUR1ReportHandler(BaseReportHandler):
         CUR 1.0 uses category/name structure for columns.
         """
         # Build column names from manifest metadata
-        manifest_columns = [
-            col["category"] + "/" + col["name"] for col in manifest.get("columns", [])
-        ]
+        manifest_columns = [col["category"] + "/" + col["name"] for col in manifest.get("columns", [])]
 
         return manifest_columns
 
-    def filter_by_date_range(
-        self, manifests: list[dict], since_timestamp, until_timestamp
-    ) -> list[dict]:
+    def filter_by_date_range(self, manifests: list[dict], since_dt: datetime, until_dt: datetime) -> list[dict]:
         """
         Filter CUR 1.0 manifests by date range.
 
-        Uses billingPeriod information from manifest.
+        A manifest is included if its billing period overlaps with the specified date range.
+        Overlap occurs when: (period_end >= since) AND (period_start <= until)
+
+        Args:
+            manifests: List of CUR 1.0 manifest dictionaries
+            since_dt: Start of date range (datetime with timezone)
+            until_dt: End of date range (datetime with timezone)
+
+        Returns:
+            List of manifests whose billing period overlaps with the date range
         """
-        if not since_timestamp or not until_timestamp:
+        if not since_dt or not until_dt:
             return manifests
 
         filtered_manifests = []
         for manifest in manifests:
             billing_period = manifest.get("billingPeriod", {})
             if not billing_period:
+                logging.warning(f"Manifest missing billingPeriod, skipping: {manifest.get('reportId')}")
                 continue
-
-            # Extract start date from billing period
-            period_start = billing_period.get("start", "").split("T")[0]
 
             try:
-                if (
-                    datetime.strftime(until_timestamp, "%Y%m%d")
-                    >= period_start
-                    >= datetime.strftime(since_timestamp, "%Y%m%d")
-                ):
+                # Parse billing period dates (format: "20240101T000000.000Z")
+                period_start_str = billing_period.get("start", "")
+                period_end_str = billing_period.get("end", "")
+
+                if not period_start_str or not period_end_str:
+                    logging.warning(f"Incomplete billing period in manifest: {billing_period}")
+                    continue
+
+                # Parse ISO format dates (e.g., "20240101T000000.000Z")
+                period_start = datetime.strptime(period_start_str.split("T")[0], "%Y%m%d")
+                period_end = datetime.strptime(period_end_str.split("T")[0], "%Y%m%d")
+
+                # Check for overlap: period overlaps if (period_end >= since) AND (period_start <= until)
+                # Convert to date for comparison (ignore time component)
+                if period_end.date() >= since_dt.date() and period_start.date() <= until_dt.date():
                     filtered_manifests.append(manifest)
-            except (ValueError, TypeError):
-                logging.warning(f"Could not parse billing period for manifest: {billing_period}")
+                    logging.debug(
+                        f"Manifest {manifest.get('reportId')} included: "
+                        f"period {period_start_str} to {period_end_str} overlaps with filter range"
+                    )
+
+            except (ValueError, TypeError, AttributeError) as e:
+                logging.warning(f"Could not parse billing period for manifest {manifest.get('reportId')}: {e}")
                 continue
 
-        logging.info(
-            f"Filtered {len(manifests)} manifests to {len(filtered_manifests)} by date range"
-        )
+        logging.info(f"Filtered {len(manifests)} manifests to {len(filtered_manifests)} by date range")
         return filtered_manifests
 
     def _parse_billing_period_from_folder_name(self, folder_name: str):
@@ -165,9 +179,7 @@ class CUR1ReportHandler(BaseReportHandler):
     def _manifest_contains_zip_files(self, manifest: dict[str, Any]) -> bool:
         """Check if CUR 1.0 manifest contains ZIP files."""
         return (
-            manifest.get("reportKeys")
-            and len(manifest["reportKeys"]) > 0
-            and manifest["reportKeys"][0].endswith("zip")
+            manifest.get("reportKeys") and len(manifest["reportKeys"]) > 0 and manifest["reportKeys"][0].endswith("zip")
         )
 
     def _extract_all_zip_files_parallel(self, zip_manifests: list[dict]) -> list[str]:
@@ -181,9 +193,7 @@ class CUR1ReportHandler(BaseReportHandler):
                     # Handle special path syntax for S3 keys
                     key_parts = chunk_key.split("/")
                     if "//" in manifest["report_folder"]:
-                        normalized_key = (
-                            f"{manifest['report_folder']}/{key_parts[-2]}/{key_parts[-1]}"
-                        )
+                        normalized_key = f"{manifest['report_folder']}/{key_parts[-2]}/{key_parts[-1]}"
                     else:
                         normalized_key = chunk_key
                     zip_tasks.append(normalized_key)
@@ -192,10 +202,7 @@ class CUR1ReportHandler(BaseReportHandler):
         extracted_csv_paths = []
         with ThreadPoolExecutor(max_workers=4) as executor:
             # Submit all download/extract tasks
-            future_to_key = {
-                executor.submit(self._download_and_extract_zip, zip_key): zip_key
-                for zip_key in zip_tasks
-            }
+            future_to_key = {executor.submit(self._download_and_extract_zip, zip_key): zip_key for zip_key in zip_tasks}
 
             # Collect results as they complete
             for future in as_completed(future_to_key):
@@ -207,9 +214,7 @@ class CUR1ReportHandler(BaseReportHandler):
                 except Exception as e:
                     logging.error(f"Failed to extract {zip_key}: {e}")
 
-        logging.info(
-            f"Successfully extracted {len(extracted_csv_paths)} CSV files from ZIP archives"
-        )
+        logging.info(f"Successfully extracted {len(extracted_csv_paths)} CSV files from ZIP archives")
         return extracted_csv_paths
 
     def _download_and_extract_zip(self, s3_key: str) -> str:

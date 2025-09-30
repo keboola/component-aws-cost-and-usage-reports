@@ -48,9 +48,7 @@ class MockS3Client:
                     contents.append(
                         {
                             "Key": key,
-                            "LastModified": datetime.fromtimestamp(
-                                file_path.stat().st_mtime
-                            ),
+                            "LastModified": datetime.fromtimestamp(file_path.stat().st_mtime),
                             "Size": file_path.stat().st_size,
                         }
                     )
@@ -76,9 +74,7 @@ class MockS3Client:
         return {"Body": MockBody(content)}
 
 
-def test_cur_format(
-    test_name: str, mock_data_path: str, config_path: str, expected_output_path: str
-):
+def test_cur_format(test_name: str, mock_data_path: str, config_path: str, expected_output_path: str):
     """Test a specific CUR format with mock data."""
     print(f"\n🧪 Testing {test_name}")
     print("=" * 50)
@@ -110,10 +106,7 @@ def test_cur_format(
 
         # Create handler using factory
         handler = ReportHandlerFactory.create_handler(
-            s3_client=mock_s3_client, 
-            bucket=bucket, 
-            report_prefix=prefix,
-            s3_objects=s3_objects
+            s3_client=mock_s3_client, bucket=bucket, report_prefix=prefix, s3_objects=s3_objects
         )
         print(f"🏗️ Created handler: {type(handler).__name__}")
 
@@ -141,9 +134,7 @@ def test_cur_format(
         for i, manifest in enumerate(manifests):
             print(f"  📄 Manifest {i + 1}:")
             print(f"    • Period: {manifest.get('period', 'unknown')}")
-            print(
-                f"    • Format version: {manifest.get('format_version', manifest.get('cur_version', 'unknown'))}"
-            )
+            print(f"    • Format version: {manifest.get('format_version', manifest.get('cur_version', 'unknown'))}")
             print(f"    • Columns: {len(manifest.get('columns', []))}")
 
         # Test column normalization
@@ -171,9 +162,7 @@ def test_cur_format(
                 print(f"❌ Invalid pattern: {pattern}")
 
         if valid_patterns:
-            print(
-                f"✅ {test_name} test PASSED - {len(valid_patterns)} valid patterns generated"
-            )
+            print(f"✅ {test_name} test PASSED - {len(valid_patterns)} valid patterns generated")
             return True
         else:
             print(f"❌ {test_name} test FAILED - no valid patterns")
@@ -204,9 +193,7 @@ def main():
         test_name="CUR 1.0 (Legacy ZIP)",
         mock_data_path=str(mock_data_path / "cur_1_0" / "s3_structure"),
         config_path=str(base_path / "functional_tests" / "cur_1_0" / "config.json"),
-        expected_output_path=str(
-            base_path / "functional_tests" / "cur_1_0" / "expected_output.csv"
-        ),
+        expected_output_path=str(base_path / "functional_tests" / "cur_1_0" / "expected_output.csv"),
     )
     test_results.append(("CUR 1.0", cur1_result))
 
@@ -215,9 +202,7 @@ def main():
         test_name="CUR 2.0 (Modern GZIP)",
         mock_data_path=str(mock_data_path / "cur_2_0" / "s3_structure"),
         config_path=str(base_path / "functional_tests" / "cur_2_0" / "config.json"),
-        expected_output_path=str(
-            base_path / "functional_tests" / "cur_2_0" / "expected_output.csv"
-        ),
+        expected_output_path=str(base_path / "functional_tests" / "cur_2_0" / "expected_output.csv"),
     )
     test_results.append(("CUR 2.0", cur2_result))
 

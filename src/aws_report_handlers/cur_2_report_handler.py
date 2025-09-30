@@ -14,8 +14,9 @@ import logging
 import os
 import re
 import tempfile
+from calendar import monthrange
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from .base_handler import BaseReportHandler
 
@@ -55,9 +56,7 @@ class CUR2ReportHandler(BaseReportHandler):
 
                     # Enrich with metadata for processing
                     manifest["last_modified"] = s3_object["LastModified"]
-                    manifest["report_folder"] = self._extract_report_folder(
-                        key, period, manifest_pattern
-                    )
+                    manifest["report_folder"] = self._extract_report_folder(key, period, manifest_pattern)
                     manifest["period"] = period
                     manifest["format_version"] = "2.0"
                     # Ensure assemblyId exists (fallback to reportId or generate one)
@@ -117,9 +116,7 @@ class CUR2ReportHandler(BaseReportHandler):
                         logging.info(f"Successfully extracted {s3_key} to {extracted_path}")
                     except Exception as e:
                         logging.error(f"Failed to extract GZIP file {s3_key}: {e}")
-                        logging.warning(
-                            f"Falling back to S3 pattern for {s3_key} (this may fail with DuckDB)"
-                        )
+                        logging.warning(f"Falling back to S3 pattern for {s3_key} (this may fail with DuckDB)")
                         # Don't add fallback S3 pattern - it will fail anyway
                         # Instead, try alternative approach or skip this file
                         continue
@@ -139,9 +136,7 @@ class CUR2ReportHandler(BaseReportHandler):
                 # Fallback to wildcard pattern if no reportKeys
                 period = manifest["period"]
                 if base_path:
-                    pattern = (
-                        f"s3://{self.bucket}/{base_path}/data/BILLING_PERIOD={period}/*.csv.gz"
-                    )
+                    pattern = f"s3://{self.bucket}/{base_path}/data/BILLING_PERIOD={period}/*.csv.gz"
                 else:
                     pattern = f"s3://{self.bucket}/data/BILLING_PERIOD={period}/*.csv.gz"
                 patterns.append(pattern)
@@ -163,40 +158,52 @@ class CUR2ReportHandler(BaseReportHandler):
 
         return manifest_columns
 
-    def filter_by_date_range(
-        self, manifests: list[dict], since_timestamp, until_timestamp
-    ) -> list[dict]:
+    def filter_by_date_range(self, manifests: list[dict], since_dt: datetime, until_dt: datetime) -> list[dict]:
         """
         Filter CUR 2.0 manifests by date range.
 
-        Uses BILLING_PERIOD information from the manifest period.
+        A manifest is included if its billing period overlaps with the specified date range.
+        For monthly periods (YYYY-MM), the entire month is considered.
+        Overlap occurs when: (period_end >= since) AND (period_start <= until)
+
+        Args:
+            manifests: List of CUR 2.0 manifest dictionaries
+            since_dt: Start of date range (datetime with timezone)
+            until_dt: End of date range (datetime with timezone)
+
+        Returns:
+            List of manifests whose billing period overlaps with the date range
         """
-        if not since_timestamp or not until_timestamp:
+        if not since_dt or not until_dt:
             return manifests
 
         filtered_manifests = []
         for manifest in manifests:
             period = manifest.get("period")
             if not period:
+                logging.warning(f"Manifest missing period, skipping: {manifest.get('reportId')}")
                 continue
 
             try:
-                # Parse period (YYYY-MM format) to date
-                period_date = self._parse_billing_period(period)
-                if not period_date:
+                # Parse period to get start and end dates
+                period_start, period_end = self._parse_billing_period_range(period)
+                if not period_start or not period_end:
+                    logging.warning(f"Could not parse billing period '{period}'")
                     continue
 
-                # Check if period falls within date range
-                if since_timestamp.date() <= period_date <= until_timestamp.date():
+                # Check for overlap: period overlaps if (period_end >= since) AND (period_start <= until)
+                if period_end >= since_dt.date() and period_start <= until_dt.date():
                     filtered_manifests.append(manifest)
+                    logging.debug(
+                        f"Manifest {manifest.get('reportId')} included: "
+                        f"period {period} ({period_start} to {period_end}) overlaps with filter range"
+                    )
 
-            except (ValueError, TypeError) as e:
+            except (ValueError, TypeError, AttributeError) as e:
                 logging.warning(f"Could not parse billing period '{period}': {e}")
                 continue
 
-        logging.info(
-            f"Filtered {len(manifests)} manifests to {len(filtered_manifests)} by date range"
-        )
+        logging.info(f"Filtered {len(manifests)} manifests to {len(filtered_manifests)} by date range")
         return filtered_manifests
 
     def _download_and_extract_gzip(self, s3_key: str) -> str:
@@ -254,14 +261,20 @@ class CUR2ReportHandler(BaseReportHandler):
         # Last resort: remove last 3 parts (metadata/BILLING_PERIOD=period/manifest)
         return "/".join(parts[:-3]) if len(parts) > 3 else "/".join(parts[:-1])
 
-    def _parse_billing_period(self, period: str) -> datetime.date:
+    def _parse_billing_period(self, period: str) -> Optional[datetime.date]:
         """
-        Parse CUR 2.0 billing period to date.
+        Parse CUR 2.0 billing period to start date.
 
         Supports various formats:
-        - YYYY-MM (monthly)
-        - YYYY-MM-DD (daily)
-        - YYYY (yearly)
+        - YYYY-MM (monthly) -> first day of month
+        - YYYY-MM-DD (daily) -> that specific day
+        - YYYY (yearly) -> first day of year
+
+        Args:
+            period: Billing period string
+
+        Returns:
+            Start date of the period, or None if parsing fails
         """
         try:
             if re.match(r"^\d{4}-\d{2}-\d{2}$", period):
@@ -285,3 +298,56 @@ class CUR2ReportHandler(BaseReportHandler):
             logging.error(f"Failed to parse billing period '{period}': {e}")
 
         return None
+
+    def _parse_billing_period_range(self, period: str) -> tuple[Optional[datetime.date], Optional[datetime.date]]:
+        """
+        Parse CUR 2.0 billing period to date range (start, end).
+
+        Supports various formats:
+        - YYYY-MM (monthly) -> first day to last day of month
+        - YYYY-MM-DD (daily) -> that day to that day
+        - YYYY (yearly) -> first day to last day of year
+
+        Args:
+            period: Billing period string (e.g., "2024-09")
+
+        Returns:
+            Tuple of (start_date, end_date), or (None, None) if parsing fails
+        """
+        try:
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", period):
+                # Daily: YYYY-MM-DD
+                date = datetime.strptime(period, "%Y-%m-%d").date()
+                return (date, date)
+
+            elif re.match(r"^\d{4}-\d{2}$", period):
+                # Monthly: YYYY-MM
+                year, month = map(int, period.split("-"))
+                start_date = datetime(year, month, 1).date()
+
+                # Calculate last day of month using monthrange
+                last_day = monthrange(year, month)[1]
+                end_date = datetime(year, month, last_day).date()
+
+                return (start_date, end_date)
+
+            elif re.match(r"^\d{4}$", period):
+                # Yearly: YYYY
+                year = int(period)
+                start_date = datetime(year, 1, 1).date()
+                end_date = datetime(year, 12, 31).date()
+                return (start_date, end_date)
+
+            elif "W" in period:
+                # Weekly format: YYYY-WXX (approximate as full month)
+                logging.warning(f"Weekly billing period format approximated: {period}")
+                year_match = re.match(r"^(\d{4})", period)
+                if year_match:
+                    year = int(year_match.group(1))
+                    # Approximate as full year
+                    return (datetime(year, 1, 1).date(), datetime(year, 12, 31).date())
+
+        except ValueError as e:
+            logging.error(f"Failed to parse billing period range '{period}': {e}")
+
+        return (None, None)
