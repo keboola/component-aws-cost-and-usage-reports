@@ -15,7 +15,7 @@ import os
 import re
 import tempfile
 from calendar import monthrange
-from datetime import datetime, date
+from datetime import datetime
 from typing import Any, Optional
 
 from .base_handler import BaseReportHandler
@@ -261,7 +261,7 @@ class CUR2ReportHandler(BaseReportHandler):
         # Last resort: remove last 3 parts (metadata/BILLING_PERIOD=period/manifest)
         return "/".join(parts[:-3]) if len(parts) > 3 else "/".join(parts[:-1])
 
-    def _parse_billing_period(self, period: str) -> Optional[date]:
+    def _parse_billing_period(self, period: str) -> Optional[datetime.date]:
         """
         Parse CUR 2.0 billing period to start date.
 
@@ -269,7 +269,6 @@ class CUR2ReportHandler(BaseReportHandler):
         - YYYY-MM (monthly) -> first day of month
         - YYYY-MM-DD (daily) -> that specific day
         - YYYY (yearly) -> first day of year
-        - YYYYWXX (weekly) -> Monday of the specified ISO week
 
         Args:
             period: Billing period string
@@ -287,20 +286,13 @@ class CUR2ReportHandler(BaseReportHandler):
             elif re.match(r"^\d{4}$", period):
                 # Yearly: YYYY (use first day of year)
                 return datetime.strptime(period + "-01-01", "%Y-%m-%d").date()
-            elif "W" in period:
-                # Weekly format: YYYYWXX (e.g., 2025W03)
-                week_match = re.match(r"^(\d{4})W(\d{2})$", period)
-                if week_match:
-                    year = int(week_match.group(1))
-                    week = int(week_match.group(2))
-                    return date.fromisocalendar(year, week, 1)
 
         except ValueError as e:
             logging.error(f"Failed to parse billing period '{period}': {e}")
 
         return None
 
-    def _parse_billing_period_range(self, period: str) -> tuple[Optional[date], Optional[date]]:
+    def _parse_billing_period_range(self, period: str) -> tuple[Optional[datetime.date], Optional[datetime.date]]:
         """
         Parse CUR 2.0 billing period to date range (start, end).
 
@@ -308,7 +300,6 @@ class CUR2ReportHandler(BaseReportHandler):
         - YYYY-MM (monthly) -> first day to last day of month
         - YYYY-MM-DD (daily) -> that day to that day
         - YYYY (yearly) -> first day to last day of year
-        - YYYYWXX (weekly) -> Monday to Sunday of the specified ISO week
 
         Args:
             period: Billing period string (e.g., "2024-09")
@@ -319,8 +310,8 @@ class CUR2ReportHandler(BaseReportHandler):
         try:
             if re.match(r"^\d{4}-\d{2}-\d{2}$", period):
                 # Daily: YYYY-MM-DD
-                date_obj = datetime.strptime(period, "%Y-%m-%d").date()
-                return (date_obj, date_obj)
+                date = datetime.strptime(period, "%Y-%m-%d").date()
+                return (date, date)
 
             elif re.match(r"^\d{4}-\d{2}$", period):
                 # Monthly: YYYY-MM
@@ -339,16 +330,6 @@ class CUR2ReportHandler(BaseReportHandler):
                 start_date = datetime(year, 1, 1).date()
                 end_date = datetime(year, 12, 31).date()
                 return (start_date, end_date)
-
-            elif "W" in period:
-                # Weekly format: YYYYWXX (e.g., 2025W03)
-                week_match = re.match(r"^(\d{4})W(\d{2})$", period)
-                if week_match:
-                    year = int(week_match.group(1))
-                    week = int(week_match.group(2))
-                    start_date = date.fromisocalendar(year, week, 1)
-                    end_date = date.fromisocalendar(year, week, 7)
-                    return (start_date, end_date)
 
         except ValueError as e:
             logging.error(f"Failed to parse billing period range '{period}': {e}")
