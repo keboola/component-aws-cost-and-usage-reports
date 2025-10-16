@@ -40,8 +40,9 @@ class CUR1ReportHandler(BaseReportHandler):
             object_name = s3_object["Key"].split("/")[-1]
             parent_folder_name = s3_object["Key"].split("/")[-2]
 
-            # Parse billing period from folder name (YYYYMMDD-YYYYMMDD format)
-            start_date, end_date = self._parse_billing_period_from_folder_name(parent_folder_name)
+            # Try to parse billing period from folder name (YYYYMMDD-YYYYMMDD format)
+            # Used only to identify valid report folders (gate), not to mutate manifest content
+            start_date, end_date = self._try_parse_billing_period_from_folder_name(parent_folder_name)
 
             # Process only root-level manifest files for valid billing periods
             if start_date and object_name == manifest_file_pattern:
@@ -157,24 +158,41 @@ class CUR1ReportHandler(BaseReportHandler):
         logging.info(f"Filtered {len(manifests)} manifests to {len(filtered_manifests)} by date range")
         return filtered_manifests
 
-    def _parse_billing_period_from_folder_name(self, folder_name: str):
-        """Parse billing period dates from CUR 1.0 folder name (YYYYMMDD-YYYYMMDD)."""
-        try:
-            # AWS billing periods are typically in format YYYYMMDD-YYYYMMDD
-            date_parts = folder_name.split("-")
+    def _try_parse_billing_period_from_folder_name(self, folder_name: str) -> tuple[datetime | None, datetime | None]:
+        """
+        Best-effort parsing of a CUR 1.0 billing period from a folder name.
 
-            if len(date_parts) != 2:
-                return None, None
+        Context:
+        - CUR 1.0 commonly uses folder names in the format YYYYMMDD-YYYYMMDD.
+        - In line with the main-branch behavior, this method is used only as a
+          gate to recognize valid period folders when scanning S3.
+        - This method does not mutate the manifest; filtering relies solely on
+          the billingPeriod present in the manifest JSON.
 
-            start_date = datetime.strptime(date_parts[0], "%Y%m%d")
-            end_date = datetime.strptime(date_parts[1], "%Y%m%d")
+        Behavior:
+        - Attempts to split the folder name into two parts and parse both using
+          the "%Y%m%d" format.
+        - On failure, returns (None, None) without logging (expected, because most
+          folders are not period folders, e.g., "metadata", "data").
 
-            return start_date, end_date
+        Args:
+            folder_name: S3 folder name, e.g., "20240101-20240131".
 
-        except ValueError:
-            # Not a valid date format
-            logging.debug(f"Could not parse billing period from folder name: {folder_name}")
-            return None, None
+        Returns:
+            (start_date, end_date) or (None, None) if invalid format/content.
+        """
+        # Quick pattern check - expected format: YYYYMMDD-YYYYMMDD
+        periods = folder_name.split("-")
+        start_date = None
+        end_date = None
+        if len(periods) == 2:
+            try:
+                start_date = datetime.strptime(periods[0], "%Y%m%d")
+                end_date = datetime.strptime(periods[1], "%Y%m%d")
+            except Exception:
+                pass
+
+        return start_date, end_date
 
     def _manifest_contains_zip_files(self, manifest: dict[str, Any]) -> bool:
         """Check if CUR 1.0 manifest contains ZIP files."""
