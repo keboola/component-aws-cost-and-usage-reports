@@ -1,0 +1,139 @@
+{
+  "assemblyId": "987f6543-a21b-43c7-d654-321098765432",
+  "account": "123456789012",
+  "columns": [
+    {
+      "name": "identity_line_item_id",
+      "type": "OptionalString"
+    },
+    {
+      "name": "identity_time_interval",
+      "type": "OptionalString"
+    },
+    {
+      "name": "bill_invoice_id",
+      "type": "OptionalString"
+    },
+    {
+      "name": "bill_billing_entity",
+      "type": "OptionalString"
+    },
+    {
+      "name": "bill_bill_type",
+      "type": "OptionalString"
+    },
+    {
+      "name": "bill_payer_account_id",
+      "type": "OptionalString"
+    },
+    {
+      "name": "bill_billing_period_start_date",
+      "type": "OptionalString"
+    },
+    {
+      "name": "bill_billing_period_end_date",
+      "type": "OptionalString"
+    },
+    {
+      "name": "line_item_usage_account_id",
+      "type": "OptionalString"
+    },
+    {
+      "name": "line_item_line_item_type",
+      "type": "OptionalString"
+    },
+    {
+      "name": "line_item_usage_start_date",
+      "type": "OptionalString"
+    },
+    {
+      "name": "line_item_usage_end_date",
+      "type": "OptionalString"
+    },
+    {
+      "name": "line_item_product_code",
+      "type": "OptionalString"
+    },
+    {
+      "name": "line_item_usage_type",
+      "type": "OptionalString"
+    },
+    {
+      "name": "line_item_operation",
+      "type": "OptionalString"
+    },
+    {
+      "name": "line_item_availability_zone",
+      "type": "OptionalString"
+    },
+    {
+      "name": "line_item_resource_id",
+      "type": "OptionalString"
+    },
+    {
+      "name": "line_item_usage_amount",
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "name": "line_item_normalization_factor",
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "name": "line_item_normalized_usage_amount",
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "name": "line_item_currency_code",
+      "type": "OptionalString"
+    },
+    {
+      "name": "line_item_unblended_rate",
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "name": "line_item_unblended_cost",
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "name": "line_item_blended_rate",
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "name": "line_item_blended_cost",
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "name": "line_item_line_item_description",
+      "type": "OptionalString"
+    },
+    {
+      "name": "line_item_tax_type",
+      "type": "OptionalString"
+    },
+    {
+      "name": "product_product_name",
+      "type": "OptionalString"
+    },
+    {
+      "name": "product_account_assistance",
+      "type": "OptionalString"
+    },
+    {
+      "name": "product_architectural_review",
+      "type": "OptionalString"
+    }
+  ],
+  "charset": "UTF-8",
+  "compression": "GZIP",
+  "contentType": "text/csv",
+  "reportId": "87654321-4321-4321-4321-210987654321",
+  "reportName": "MockTestReportV2",
+  "executionId": "test-exec-id-12345",
+  "exportArn": "arn:aws:bcm-data-exports:us-east-1:123456789012:export/MockTestReportV2-test",
+  "dataFiles": [
+    "s3://mock-cur-v2-bucket/data/BILLING_PERIOD=2024-09/MockTestReportV2-00001.csv.gz"
+  ],
+  "schema": "2",
+  "timeFormat": "YYYY-MM-DDTHH:mm:ssZ",
+  "finalized": true
+}

@@ -1,0 +1,172 @@
+{
+  "assemblyId": "123e4567-e89b-12d3-a456-426614174000",
+  "account": "123456789012",
+  "columns": [
+    {
+      "category": "identity",
+      "name": "LineItemId",
+      "type": "OptionalString"
+    },
+    {
+      "category": "identity", 
+      "name": "TimeInterval",
+      "type": "OptionalString"
+    },
+    {
+      "category": "bill",
+      "name": "InvoiceId",
+      "type": "OptionalString"
+    },
+    {
+      "category": "bill",
+      "name": "BillingEntity",
+      "type": "OptionalString"
+    },
+    {
+      "category": "bill",
+      "name": "BillType",
+      "type": "OptionalString"
+    },
+    {
+      "category": "bill",
+      "name": "PayerAccountId",
+      "type": "OptionalString"
+    },
+    {
+      "category": "bill",
+      "name": "BillingPeriodStartDate",
+      "type": "OptionalString"
+    },
+    {
+      "category": "bill",
+      "name": "BillingPeriodEndDate", 
+      "type": "OptionalString"
+    },
+    {
+      "category": "lineItem",
+      "name": "UsageAccountId",
+      "type": "OptionalString"
+    },
+    {
+      "category": "lineItem",
+      "name": "LineItemType",
+      "type": "OptionalString"
+    },
+    {
+      "category": "lineItem",
+      "name": "UsageStartDate",
+      "type": "OptionalString"
+    },
+    {
+      "category": "lineItem",
+      "name": "UsageEndDate",
+      "type": "OptionalString"
+    },
+    {
+      "category": "lineItem",
+      "name": "ProductCode",
+      "type": "OptionalString"
+    },
+    {
+      "category": "lineItem",
+      "name": "UsageType",
+      "type": "OptionalString"
+    },
+    {
+      "category": "lineItem",
+      "name": "Operation",
+      "type": "OptionalString"
+    },
+    {
+      "category": "lineItem",
+      "name": "AvailabilityZone",
+      "type": "OptionalString"
+    },
+    {
+      "category": "lineItem",
+      "name": "ResourceId",
+      "type": "OptionalString"
+    },
+    {
+      "category": "lineItem",
+      "name": "UsageAmount",
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "category": "lineItem",
+      "name": "NormalizationFactor",
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "category": "lineItem",
+      "name": "NormalizedUsageAmount",
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "category": "lineItem",
+      "name": "CurrencyCode",
+      "type": "OptionalString"
+    },
+    {
+      "category": "lineItem",
+      "name": "UnblendedRate",
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "category": "lineItem",
+      "name": "UnblendedCost",
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "category": "lineItem",
+      "name": "BlendedRate", 
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "category": "lineItem",
+      "name": "BlendedCost",
+      "type": "OptionalBigDecimal"
+    },
+    {
+      "category": "lineItem",
+      "name": "LineItemDescription",
+      "type": "OptionalString"
+    },
+    {
+      "category": "lineItem",
+      "name": "TaxType",
+      "type": "OptionalString"
+    },
+    {
+      "category": "product",
+      "name": "ProductName",
+      "type": "OptionalString"
+    },
+    {
+      "category": "product",
+      "name": "accountAssistance",
+      "type": "OptionalString"
+    },
+    {
+      "category": "product",
+      "name": "architecturalReview",
+      "type": "OptionalString"
+    }
+  ],
+  "charset": "UTF-8",
+  "compression": "ZIP",
+  "contentType": "text/csv",
+  "reportId": "12345678-1234-1234-1234-123456789012",
+  "reportName": "MockTestReport",
+  "billingPeriod": {
+    "start": "20240101T000000.000Z",
+    "end": "20240131T235959.999Z"
+  },
+  "bucket": "mock-cur-bucket",
+  "reportKeys": [
+    "20240101-20240131/MockTestReport-00001.csv.zip"
+  ],
+  "schema": "1",
+  "timeFormat": "YYYY-MM-DDTHH:mm:ssZ",
+  "finalized": true
+}
