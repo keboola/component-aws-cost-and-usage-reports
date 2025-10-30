@@ -52,6 +52,10 @@ class Configuration(BaseModel):
     @model_validator(mode="after")
     def validate_dates(self) -> "Configuration":
         """Validate date formats."""
+        # fix when old config had empty max_date
+        if self.max_date == "":
+            self.max_date = "now"
+        
         # Validate min_date_since
         if self.min_date_since is not None and self.min_date_since != "":
             try:
