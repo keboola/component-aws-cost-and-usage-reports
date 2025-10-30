@@ -35,7 +35,6 @@ class Configuration(BaseModel):
     since_last: bool = True
     loading_options: LoadingOptions = Field(default_factory=LoadingOptions)
     debug: bool = False
-    version: str | None = None
 
     @property
     def start_datetime(self) -> datetime:

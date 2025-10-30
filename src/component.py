@@ -43,7 +43,6 @@ class Component(ComponentBase):
             s3_client=s3_client,
             bucket=self.config.aws_parameters.s3_bucket,
             report_prefix=self.config.report_path_prefix,
-            version=self.config.version,
         )
         self.duckdb_processor = DuckDB(self.config)
         self.column_normalizer = DictHeaderNormalizer(replace_dict={"/": "__"})
