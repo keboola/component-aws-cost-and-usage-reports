@@ -55,7 +55,7 @@ class Configuration(BaseModel):
         # fix when old config had empty max_date
         if self.max_date == "":
             self.max_date = "now"
-        
+
         # Validate min_date_since
         if self.min_date_since is not None and self.min_date_since != "":
             try:
