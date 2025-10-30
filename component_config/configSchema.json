@@ -139,6 +139,20 @@
       "type": "string",
       "title": "Report prefix",
       "description": "The prefix as you set up in the AWS CUR config. In S3 bucket this is path to your report. E.g. my-report or some/long/prefix/myreport"
+    },
+    "version": {
+      "propertyOrder": 15,
+      "type": "string",
+      "title": "CUR Version",
+      "enum": [
+        "cur2"
+      ],
+      "options": {
+        "enum_titles": [
+          "CUR 2.0 (Modern)"
+        ]
+      },
+      "description": "Override the automatic CUR version detection. Leave empty to use CUR 1.0 (default), or select 'CUR 2.0 (Modern)' to force CUR 2.0 format."
     }
   }
 }

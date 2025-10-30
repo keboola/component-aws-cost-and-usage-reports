@@ -35,6 +35,7 @@ class Configuration(BaseModel):
     since_last: bool = True
     loading_options: LoadingOptions = Field(default_factory=LoadingOptions)
     debug: bool = False
+    version: str = "cur1"
 
     @property
     def start_datetime(self) -> datetime:
@@ -51,7 +52,7 @@ class Configuration(BaseModel):
 
     @model_validator(mode="after")
     def validate_dates(self) -> "Configuration":
-        """Validate date formats."""
+        """Validate date formats and version parameter."""
         # fix when old config had empty max_date
         if self.max_date == "":
             self.max_date = "now"

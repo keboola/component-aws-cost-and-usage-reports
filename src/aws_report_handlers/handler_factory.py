@@ -9,7 +9,6 @@ import boto3
 from .base_handler import BaseReportHandler
 from .cur_1_report_handler import CUR1ReportHandler
 from .cur_2_report_handler import CUR2ReportHandler
-from .version_detector import ReportVersionDetector
 
 
 class ReportHandlerFactory:
@@ -21,32 +20,31 @@ class ReportHandlerFactory:
         bucket: str,
         report_prefix: str,
         s3_objects: list[dict] | None = None,
+        version: str | None = None,
     ) -> BaseReportHandler:
         """
-        Create handler based on detected report format.
+        Create handler based on specified version or detected report format.
 
         Args:
             s3_client: S3 client for operations
             bucket: S3 bucket name
             report_prefix: Report prefix/path
             s3_objects: Optional S3 objects for format detection (will fetch if not provided)
+            version: Optional version override ('cur2' for CUR 2.0, None defaults to CUR 1.0)
 
         Returns:
             Appropriate handler instance (CUR1ReportHandler or CUR2ReportHandler)
         """
-        # If no S3 objects provided, create a temporary handler to fetch them
-        if s3_objects is None:
-            temp_handler = CUR1ReportHandler(s3_client, bucket, report_prefix)
-            s3_objects = list(temp_handler.get_s3_objects())
-
-        version_type = ReportVersionDetector.detect_version(s3_objects)
-
-        if version_type == "modern":
-            logging.info("Creating CUR 2.0 report handler")
+        # If version is explicitly specified, use it
+        if version == "cur2":
+            logging.info("Creating CUR 2.0 report handler (version explicitly set)")
             handler = CUR2ReportHandler(s3_client, bucket, report_prefix)
-        else:
-            logging.info("Creating CUR 1.0 report handler")
+        elif version in (None, "", "cur1"):  # Default to CUR 1.0 when no version specified
+            logging.info("Creating CUR 1.0 report handler (default version)")
             handler = CUR1ReportHandler(s3_client, bucket, report_prefix)
+        else:
+            # Invalid version parameter
+            raise ValueError(f"Invalid version parameter: {version}. Use 'cur2' or None.")
 
         return handler
 
