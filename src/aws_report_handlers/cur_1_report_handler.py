@@ -30,32 +30,39 @@ class CUR1ReportHandler(BaseReportHandler):
         """
         Retrieve and parse CUR 1.0 manifest files from S3 objects.
 
-        CUR 1.0 manifests are located in the root of report folders with
-        date-based naming (YYYYMMDD-YYYYMMDD).
+        CUR 1.0 manifests are located in report folders with date-based naming.
+        Supports both structures:
+        - .../YYYYMMDD-YYYYMMDD/report-Manifest.json
+        - .../YYYYMMDD-YYYYMMDD/timestampZ/report-Manifest.json
         """
         manifests = []
         manifest_file_pattern = f"{report_name}-Manifest.json"
 
         for s3_object in s3_objects:
-            object_name = s3_object["Key"].split("/")[-1]
-            parent_folder_name = s3_object["Key"].split("/")[-2]
+            key_parts = s3_object["Key"].split("/")
+            object_name = key_parts[-1]
 
-            # Try to parse billing period from folder name (YYYYMMDD-YYYYMMDD format)
-            # Used only to identify valid report folders (gate), not to mutate manifest content
+            if object_name != manifest_file_pattern:
+                continue
+
+            parent_folder_name = key_parts[-2]
             start_date, end_date = self._try_parse_billing_period_from_folder_name(parent_folder_name)
 
-            # Process only root-level manifest files for valid billing periods
-            if start_date and object_name == manifest_file_pattern:
-                # Download and parse manifest JSON
+            if not start_date:
+                if len(key_parts) >= 3:
+                    grandparent_folder_name = key_parts[-3]
+                    start_date, end_date = self._try_parse_billing_period_from_folder_name(grandparent_folder_name)
+                    if start_date:
+                        parent_folder_name = grandparent_folder_name
+
+            if start_date:
                 manifest_content = self._read_s3_file_contents(s3_object["Key"])
                 manifest = json.loads(manifest_content)
 
-                # Enrich with additional metadata for processing
                 manifest["last_modified"] = s3_object["LastModified"]
                 manifest["report_folder"] = s3_object["Key"].replace(f"/{manifest_file_pattern}", "")
                 manifest["period"] = parent_folder_name
                 manifest["format_version"] = "1.0"
-                # Ensure assemblyId exists (fallback to reportId or generate one)
                 if "assemblyId" not in manifest:
                     manifest["assemblyId"] = manifest.get(
                         "reportId",
@@ -75,17 +82,15 @@ class CUR1ReportHandler(BaseReportHandler):
         """
         patterns = []
 
-        # Separate ZIP and CSV manifests for different processing
         csv_manifests = [m for m in manifests if not self._manifest_contains_zip_files(m)]
         zip_manifests = [m for m in manifests if self._manifest_contains_zip_files(m)]
 
-        # Process direct CSV patterns
         for manifest in csv_manifests:
-            base_path = manifest["report_folder"]
-            pattern = f"s3://{self.bucket}/{base_path}/*.csv"
-            patterns.append(pattern)
+            report_keys = manifest.get("reportKeys", [])
+            for key in report_keys:
+                if key.endswith(".csv") or key.endswith(".csv.gz"):
+                    patterns.append(f"s3://{self.bucket}/{key}")
 
-        # Process ZIP files in parallel
         if zip_manifests:
             extracted_paths = self._extract_all_zip_files_parallel(zip_manifests)
             patterns.extend(extracted_paths)
