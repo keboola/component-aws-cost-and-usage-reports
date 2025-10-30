@@ -25,34 +25,39 @@ class DuckDB:
         self.con = None
 
     @staticmethod
-    def _init_connection(threads: int = 4, max_memory: int = 1024, db_path: str = ":memory:") -> DuckDBPyConnection:
+    def _init_connection(db_path: str = ":memory:") -> DuckDBPyConnection:
         """
-        Returns connection to temporary DuckDB database with advanced
-        optimizations. DuckDB supports thread-safe access to a single
-        connection.
+        Returns connection to temporary DuckDB database.
+        DuckDB auto-detects available threads and memory by default.
+        Optional overrides via DUCKDB_THREADS and DUCKDB_MEMORY_MB environment variables.
         """
         os.makedirs(DUCK_DB_DIR, exist_ok=True)
-        # Enhanced configuration with performance optimizations
-        # Using only definitely valid DuckDB configuration parameters
         config = {
-            # Basic settings
             "temp_directory": DUCK_DB_DIR,
-            "threads": threads,
-            "max_memory": f"{max_memory}MB",
             "extension_directory": os.path.join(DUCK_DB_DIR, "extensions"),
-            # Performance optimizations
-            "preserve_insertion_order": False,  # Faster inserts
+            "preserve_insertion_order": False,
         }
 
         logging.info(f"Initializing DuckDB connection with config: {config}")
         conn = duckdb.connect(database=db_path, config=config)
+
+        threads_env = os.getenv("DUCKDB_THREADS")
+        if threads_env:
+            conn.execute(f"PRAGMA threads={int(threads_env)}")
+            logging.info(f"Set DuckDB threads to {threads_env} from DUCKDB_THREADS env")
+
+        memory_env = os.getenv("DUCKDB_MEMORY_MB")
+        if memory_env:
+            conn.execute(f"PRAGMA memory_limit='{int(memory_env)}MB'")
+            logging.info(f"Set DuckDB memory limit to {memory_env}MB from DUCKDB_MEMORY_MB env")
+
         return conn
 
     def setup_connection(self):
         """Setup DuckDB connection with S3 credentials and performance
         optimizations."""
         if self.con:
-            return  # already setup
+            return
 
         logging.info("Setting up DuckDB connection...")
         self.con = self._init_connection()
@@ -61,6 +66,11 @@ class DuckDB:
         self.con.execute(f"SET s3_region='{self.config.aws_parameters.aws_region}';")
         self.con.execute(f"SET s3_access_key_id='{self.config.aws_parameters.api_key_id}';")
         self.con.execute(f"SET s3_secret_access_key='{self.config.aws_parameters.api_key_secret}';")
+
+        if self.config.debug:
+            threads = self.con.execute("PRAGMA threads").fetchone()[0]
+            memory_limit = self.con.execute("PRAGMA memory_limit").fetchone()[0]
+            logging.debug(f"DuckDB effective settings - threads: {threads}, memory_limit: {memory_limit}")
 
     def load_csv_files_bulk(self, csv_patterns: list[str]) -> bool:
         """Load CSV files from mixed patterns (S3 and local) using DuckDB
