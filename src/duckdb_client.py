@@ -101,7 +101,7 @@ class DuckDB:
 
         Loads files in batches to avoid OOM errors with large datasets.
         Each batch is loaded and committed before the next batch starts.
-        Uses first batch to infer schema for version compatibility.
+        Handles schema evolution by reconciling columns between batches.
         """
         if not csv_patterns:
             logging.info("No CSV patterns to load")
@@ -132,9 +132,24 @@ class DuckDB:
                     """)
                     table_created = True
                 else:
+                    batch_cols = self._get_batch_columns(patterns_str)
+                    table_cols = self._get_table_columns_with_filename()
+                    new_cols = [c for c in batch_cols if c not in table_cols]
+                    if new_cols:
+                        logging.info(f"Adding {len(new_cols)} new columns to table: {new_cols[:5]}...")
+                        for col in new_cols:
+                            self.con.execute(f'ALTER TABLE {RAW_REPORTS_TABLE} ADD COLUMN "{col}" VARCHAR;')
+                        table_cols = self._get_table_columns_with_filename()
+                    select_parts = []
+                    for col in table_cols:
+                        if col in batch_cols:
+                            select_parts.append(f'"{col}"')
+                        else:
+                            select_parts.append(f'NULL AS "{col}"')
+                    select_sql = ", ".join(select_parts)
                     self.con.execute(f"""
                         INSERT INTO {RAW_REPORTS_TABLE}
-                        SELECT *
+                        SELECT {select_sql}
                         FROM read_csv_auto(['{patterns_str}'],
                                            HEADER=TRUE,
                                            ALL_VARCHAR=TRUE,
@@ -148,6 +163,32 @@ class DuckDB:
         except Exception as e:
             logging.error(f"Failed to load CSV files bulk: {e}")
             return False
+
+    def _get_batch_columns(self, patterns_str: str) -> list[str]:
+        """Get column names from a batch of CSV files using LIMIT 0 probe."""
+        try:
+            result = self.con.execute(f"""
+                DESCRIBE SELECT *
+                FROM read_csv_auto(['{patterns_str}'],
+                                   HEADER=TRUE,
+                                   ALL_VARCHAR=TRUE,
+                                   union_by_name=true,
+                                   filename=true)
+                LIMIT 0;
+            """).fetchall()
+            return [row[0] for row in result]
+        except Exception as e:
+            logging.error(f"Failed to get batch columns: {e}")
+            return []
+
+    def _get_table_columns_with_filename(self) -> list[str]:
+        """Get all column names from table including filename column."""
+        try:
+            result = self.con.execute(f"SELECT name FROM pragma_table_info('{RAW_REPORTS_TABLE}');").fetchall()
+            return [row[0] for row in result]
+        except Exception as e:
+            logging.error(f"Failed to get table columns: {e}")
+            return []
 
     def get_current_columns_from_table(self, table_name: str = RAW_REPORTS_TABLE) -> list[str]:
         """Get current columns from DuckDB table."""
