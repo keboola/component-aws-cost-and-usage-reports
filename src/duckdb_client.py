@@ -36,8 +36,8 @@ class DuckDB:
         os.makedirs(DUCK_DB_DIR, exist_ok=True)
         if db_path is None:
             db_path = os.path.join(DUCK_DB_DIR, "work.duckdb")
-        threads = os.getenv("DUCKDB_THREADS", "2")
-        memory = os.getenv("DUCKDB_MEMORY_MB", "1024")
+        threads = os.getenv("DUCKDB_THREADS", "1")
+        memory = os.getenv("DUCKDB_MEMORY_MB", "1280")
         if not memory.endswith("MB") and not memory.endswith("GB"):
             try:
                 memory = f"{int(memory)}MB"
@@ -50,6 +50,7 @@ class DuckDB:
             "threads": threads,
             "memory_limit": memory,
             "max_memory": memory,
+            "preserve_insertion_order": False,
         }
         logging.info(f"Initializing DuckDB connection with db_path: {db_path}")
         logging.info(f"DuckDB config: threads={threads}, memory_limit={memory}, temp_directory={DUCK_DB_DIR}")

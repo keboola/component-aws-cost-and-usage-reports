@@ -157,10 +157,14 @@ class Component(ComponentBase):
         if not self.duckdb_processor.load_csv_files_bulk(all_csv_patterns):
             raise Exception("Failed to load CSV files in bulk")
 
-        # Step 5: Get current columns from loaded data
+        # Step 5: Checkpoint before view creation to release memory
+        logging.info("Running final CHECKPOINT before view creation...")
+        self.duckdb_processor.con.execute("CHECKPOINT;")
+
+        # Step 6: Get current columns from loaded data
         current_columns = self.duckdb_processor.get_current_columns_from_table()
 
-        # Step 6: Create a simple unified view (all strings, no type
+        # Step 7: Create a simple unified view (all strings, no type
         # conversion)
         if not self.duckdb_processor.create_unified_view(final_columns, current_columns):
             raise Exception("Failed to create unified view")
