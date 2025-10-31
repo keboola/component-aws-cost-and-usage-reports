@@ -25,32 +25,31 @@ class DuckDB:
         self.con = None
 
     @staticmethod
-    def _init_connection(db_path: str = ":memory:") -> DuckDBPyConnection:
+    def _init_connection(db_path: str = None) -> DuckDBPyConnection:
         """
-        Returns connection to temporary DuckDB database.
-        DuckDB auto-detects available threads and memory by default.
+        Returns connection to on-disk DuckDB database with memory limits.
+        Uses on-disk database to avoid OOM with large datasets.
+        Sets conservative memory limits to force spilling to disk.
         Optional overrides via DUCKDB_THREADS and DUCKDB_MEMORY_MB environment variables.
         """
         os.makedirs(DUCK_DB_DIR, exist_ok=True)
+        if db_path is None:
+            db_path = os.path.join(DUCK_DB_DIR, "work.duckdb")
         config = {
             "temp_directory": DUCK_DB_DIR,
             "extension_directory": os.path.join(DUCK_DB_DIR, "extensions"),
             "preserve_insertion_order": False,
         }
-
-        logging.info(f"Initializing DuckDB connection with config: {config}")
+        logging.info(f"Initializing DuckDB connection with db_path: {db_path}, config: {config}")
         conn = duckdb.connect(database=db_path, config=config)
-
-        threads_env = os.getenv("DUCKDB_THREADS")
-        if threads_env:
-            conn.execute(f"PRAGMA threads={int(threads_env)}")
-            logging.info(f"Set DuckDB threads to {threads_env} from DUCKDB_THREADS env")
-
-        memory_env = os.getenv("DUCKDB_MEMORY_MB")
-        if memory_env:
-            conn.execute(f"PRAGMA memory_limit='{int(memory_env)}MB'")
-            logging.info(f"Set DuckDB memory limit to {memory_env}MB from DUCKDB_MEMORY_MB env")
-
+        threads_env = os.getenv("DUCKDB_THREADS", "4")
+        conn.execute(f"PRAGMA threads={int(threads_env)}")
+        logging.info(f"Set DuckDB threads to {threads_env}")
+        memory_env = os.getenv("DUCKDB_MEMORY_MB", "1536")
+        conn.execute(f"PRAGMA memory_limit='{int(memory_env)}MB'")
+        logging.info(f"Set DuckDB memory limit to {memory_env}MB (forces spilling to disk)")
+        temp_dir = conn.execute("PRAGMA temp_directory").fetchone()[0]
+        logging.info(f"DuckDB temp_directory: {temp_dir}")
         return conn
 
     def setup_connection(self):
@@ -72,30 +71,44 @@ class DuckDB:
             memory_limit = self.con.execute("PRAGMA memory_limit").fetchone()[0]
             logging.debug(f"DuckDB effective settings - threads: {threads}, memory_limit: {memory_limit}")
 
-    def load_csv_files_bulk(self, csv_patterns: list[str]) -> bool:
-        """Load CSV files from mixed patterns (S3 and local) using DuckDB
-        bulk loading."""
+    def load_csv_files_bulk(self, csv_patterns: list[str], batch_size: int = 10) -> bool:
+        """Load CSV files from mixed patterns (S3 and local) using DuckDB bulk loading with batching.
+
+        Loads files in batches to avoid OOM errors with large datasets.
+        Each batch is loaded and committed before the next batch starts.
+        """
         if not csv_patterns:
             logging.info("No CSV patterns to load")
             return False
-
-        patterns_str = "', '".join(csv_patterns)
         s3_count = sum(1 for p in csv_patterns if p.startswith("s3://"))
         local_count = len(csv_patterns) - s3_count
-
-        logging.info(f"Loading {len(csv_patterns)} CSV files ({s3_count} from S3, {local_count} local)...")
-
+        total_batches = (len(csv_patterns) + batch_size - 1) // batch_size
+        logging.info(
+            f"Loading {len(csv_patterns)} CSV files ({s3_count} from S3, {local_count} local) "
+            f"in {total_batches} batches of {batch_size}..."
+        )
         try:
-            self.con.execute(f"""
-                CREATE TABLE {RAW_REPORTS_TABLE} AS
-                SELECT *
-                FROM read_csv_auto(['{patterns_str}'],
-                                   HEADER=TRUE,
-                                   ALL_VARCHAR=TRUE,
-                                   NULLSTR=['null', 'NULL', 'None'],
-                                   union_by_name=true,
-                                   filename=true);
-            """)
+            self.con.execute(
+                f"CREATE TABLE IF NOT EXISTS {RAW_REPORTS_TABLE} AS "
+                f"SELECT * FROM read_csv_auto([''], HEADER=TRUE, ALL_VARCHAR=TRUE, "
+                f"union_by_name=true, filename=true) LIMIT 0;"
+            )
+            for batch_num, i in enumerate(range(0, len(csv_patterns), batch_size), 1):
+                batch = csv_patterns[i:i + batch_size]
+                patterns_str = "', '".join(batch)
+                logging.info(f"Loading batch {batch_num}/{total_batches}: {len(batch)} files")
+                self.con.execute(f"""
+                    INSERT INTO {RAW_REPORTS_TABLE}
+                    SELECT *
+                    FROM read_csv_auto(['{patterns_str}'],
+                                       HEADER=TRUE,
+                                       ALL_VARCHAR=TRUE,
+                                       NULLSTR=['null', 'NULL', 'None'],
+                                       union_by_name=true,
+                                       filename=true);
+                """)
+                row_count = self.con.execute(f"SELECT COUNT(*) FROM {RAW_REPORTS_TABLE}").fetchone()[0]
+                logging.info(f"Batch {batch_num}/{total_batches} loaded. Total rows: {row_count}")
             return True
         except Exception as e:
             logging.error(f"Failed to load CSV files bulk: {e}")
