@@ -97,53 +97,50 @@ class DuckDB:
                 logging.debug(f"Could not read DuckDB settings: {e}")
 
     def load_csv_files_bulk(self, csv_patterns: list[str], batch_size: int = 2) -> bool:
-        """Load CSV files from mixed patterns (S3 and local) using DuckDB bulk loading with batching.
+        """Load CSV files one at a time to avoid OOM errors with large datasets.
 
-        Loads files in batches to avoid OOM errors with large datasets.
-        Each batch is loaded and committed before the next batch starts.
-        Handles schema evolution by reconciling columns between batches.
+        Processes files individually with schema reconciliation per file.
+        Each file is loaded, reconciled, and checkpointed before the next.
+        Batch size is kept for organizational purposes but files are processed sequentially.
         """
         if not csv_patterns:
             logging.info("No CSV patterns to load")
             return False
         s3_count = sum(1 for p in csv_patterns if p.startswith("s3://"))
         local_count = len(csv_patterns) - s3_count
-        total_batches = (len(csv_patterns) + batch_size - 1) // batch_size
+        total_files = len(csv_patterns)
         logging.info(
-            f"Loading {len(csv_patterns)} CSV files ({s3_count} from S3, {local_count} local) "
-            f"in {total_batches} batches of {batch_size}..."
+            f"Loading {total_files} CSV files ({s3_count} from S3, {local_count} local) "
+            f"one file at a time..."
         )
         try:
             table_created = False
-            for batch_num, i in enumerate(range(0, len(csv_patterns), batch_size), 1):
-                batch = csv_patterns[i:i + batch_size]
-                patterns_str = "', '".join(batch)
-                logging.info(f"Loading batch {batch_num}/{total_batches}: {len(batch)} files")
+            for file_num, file_pattern in enumerate(csv_patterns, 1):
+                logging.info(f"Loading file {file_num}/{total_files}: {file_pattern.split('/')[-1]}")
                 if not table_created:
                     self.con.execute(f"""
                         CREATE TABLE {RAW_REPORTS_TABLE} AS
                         SELECT *
-                        FROM read_csv_auto(['{patterns_str}'],
+                        FROM read_csv_auto('{file_pattern}',
                                            HEADER=TRUE,
                                            ALL_VARCHAR=TRUE,
                                            NULLSTR=['null', 'NULL', 'None'],
-                                           union_by_name=true,
                                            filename=true,
                                            PARALLEL=FALSE);
                     """)
                     table_created = True
                 else:
-                    batch_cols = self._get_batch_columns(patterns_str)
+                    file_cols = self._get_file_columns(file_pattern)
                     table_cols = self._get_table_columns_with_filename()
-                    new_cols = [c for c in batch_cols if c not in table_cols]
+                    new_cols = [c for c in file_cols if c not in table_cols]
                     if new_cols:
-                        logging.info(f"Adding {len(new_cols)} new columns to table: {new_cols[:5]}...")
+                        logging.info(f"Adding {len(new_cols)} new columns: {new_cols[:3]}...")
                         for col in new_cols:
                             self.con.execute(f'ALTER TABLE {RAW_REPORTS_TABLE} ADD COLUMN "{col}" VARCHAR;')
                         table_cols = self._get_table_columns_with_filename()
                     select_parts = []
                     for col in table_cols:
-                        if col in batch_cols:
+                        if col in file_cols:
                             select_parts.append(f'"{col}"')
                         else:
                             select_parts.append(f'NULL AS "{col}"')
@@ -151,38 +148,39 @@ class DuckDB:
                     self.con.execute(f"""
                         INSERT INTO {RAW_REPORTS_TABLE}
                         SELECT {select_sql}
-                        FROM read_csv_auto(['{patterns_str}'],
+                        FROM read_csv_auto('{file_pattern}',
                                            HEADER=TRUE,
                                            ALL_VARCHAR=TRUE,
                                            NULLSTR=['null', 'NULL', 'None'],
-                                           union_by_name=true,
                                            filename=true,
                                            PARALLEL=FALSE);
                     """)
-                row_count = self.con.execute(f"SELECT COUNT(*) FROM {RAW_REPORTS_TABLE}").fetchone()[0]
-                logging.info(f"Batch {batch_num}/{total_batches} loaded. Total rows: {row_count}")
+                if file_num % 5 == 0:
+                    row_count = self.con.execute(f"SELECT COUNT(*) FROM {RAW_REPORTS_TABLE}").fetchone()[0]
+                    logging.info(f"Progress: {file_num}/{total_files} files loaded. Total rows: {row_count}")
                 self.con.execute("CHECKPOINT;")
+            row_count = self.con.execute(f"SELECT COUNT(*) FROM {RAW_REPORTS_TABLE}").fetchone()[0]
+            logging.info(f"All {total_files} files loaded successfully. Total rows: {row_count}")
             return True
         except Exception as e:
             logging.error(f"Failed to load CSV files bulk: {e}")
             return False
 
-    def _get_batch_columns(self, patterns_str: str) -> list[str]:
-        """Get column names from a batch of CSV files using LIMIT 0 probe."""
+    def _get_file_columns(self, file_pattern: str) -> list[str]:
+        """Get column names from a single CSV file using LIMIT 0 probe."""
         try:
             result = self.con.execute(f"""
                 DESCRIBE SELECT *
-                FROM read_csv_auto(['{patterns_str}'],
+                FROM read_csv_auto('{file_pattern}',
                                    HEADER=TRUE,
                                    ALL_VARCHAR=TRUE,
-                                   union_by_name=true,
                                    filename=true,
                                    PARALLEL=FALSE)
                 LIMIT 0;
             """).fetchall()
             return [row[0] for row in result]
         except Exception as e:
-            logging.error(f"Failed to get batch columns: {e}")
+            logging.error(f"Failed to get file columns: {e}")
             return []
 
     def _get_table_columns_with_filename(self) -> list[str]:
