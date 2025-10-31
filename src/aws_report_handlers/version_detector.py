@@ -23,31 +23,44 @@ class ReportVersionDetector:
         """
         if not s3_objects:
             logging.warning("No S3 objects provided for version detection")
-            return "legacy"  # Default fallback
-
-        # Primary indicator: BILLING_PERIOD= is specific to CUR 2.0
+            return "legacy"
+        logging.info(f"[VERSION DETECTION] Analyzing {len(s3_objects)} S3 objects")
+        sample_keys = [obj["Key"] for obj in s3_objects[:5]]
+        logging.info(f"[VERSION DETECTION] Sample keys: {sample_keys}")
         has_billing_period = any("BILLING_PERIOD=" in obj["Key"] for obj in s3_objects)
+        logging.info(f"[VERSION DETECTION] has_billing_period (CUR 2.0 indicator): {has_billing_period}")
         if has_billing_period:
+            billing_period_keys = [obj["Key"] for obj in s3_objects if "BILLING_PERIOD=" in obj["Key"]][:3]
+            logging.info(f"[VERSION DETECTION] BILLING_PERIOD keys: {billing_period_keys}")
             logging.info("Detected modern report format (CUR 2.0) - found BILLING_PERIOD= partitioning")
             return "modern"
-
-        # Secondary indicators for additional validation
-        has_metadata_folder = any("/metadata/" in obj["Key"] for obj in s3_objects)
-        has_gzip_files = any(obj["Key"].endswith(".csv.gz") for obj in s3_objects)
-
-        if has_metadata_folder or has_gzip_files:
-            logging.info("Detected modern report format (CUR 2.0) - found metadata folder or GZIP files")
-            return "modern"
-
-        # Legacy format indicators
         has_date_pattern = any(re.search(r"\d{8}-\d{8}", obj["Key"]) for obj in s3_objects)
-        has_zip_files = any(obj["Key"].endswith(".csv.zip") for obj in s3_objects)
-
-        if has_date_pattern or has_zip_files:
-            logging.info("Detected legacy report format (CUR 1.0) - found date patterns or ZIP files")
+        logging.info(f"[VERSION DETECTION] has_date_pattern (CUR 1.0 indicator): {has_date_pattern}")
+        if has_date_pattern:
+            date_pattern_keys = [obj["Key"] for obj in s3_objects if re.search(r"\d{8}-\d{8}", obj["Key"])][:3]
+            logging.info(f"[VERSION DETECTION] Date pattern keys: {date_pattern_keys}")
+            logging.info("Detected legacy report format (CUR 1.0) - found date patterns")
             return "legacy"
-
-        # Default fallback
+        has_metadata_folder = any("/metadata/" in obj["Key"] for obj in s3_objects)
+        logging.info(f"[VERSION DETECTION] has_metadata_folder (CUR 2.0 indicator): {has_metadata_folder}")
+        if has_metadata_folder:
+            metadata_keys = [obj["Key"] for obj in s3_objects if "/metadata/" in obj["Key"]][:3]
+            logging.info(f"[VERSION DETECTION] Metadata folder keys: {metadata_keys}")
+            logging.info("Detected modern report format (CUR 2.0) - found metadata folder")
+            return "modern"
+        has_gzip_files = any(obj["Key"].endswith(".csv.gz") for obj in s3_objects)
+        has_zip_files = any(obj["Key"].endswith(".csv.zip") for obj in s3_objects)
+        logging.info(f"[VERSION DETECTION] has_gzip_files: {has_gzip_files}, has_zip_files: {has_zip_files}")
+        if has_gzip_files:
+            gzip_keys = [obj["Key"] for obj in s3_objects if obj["Key"].endswith(".csv.gz")][:3]
+            logging.info(f"[VERSION DETECTION] GZIP file keys: {gzip_keys}")
+            logging.info("Detected modern report format (CUR 2.0) - found GZIP files")
+            return "modern"
+        if has_zip_files:
+            zip_keys = [obj["Key"] for obj in s3_objects if obj["Key"].endswith(".csv.zip")][:3]
+            logging.info(f"[VERSION DETECTION] ZIP file keys: {zip_keys}")
+            logging.info("Detected legacy report format (CUR 1.0) - found ZIP files")
+            return "legacy"
         logging.warning("Could not determine CUR version from S3 structure, defaulting to legacy (CUR 1.0)")
         return "legacy"
 
