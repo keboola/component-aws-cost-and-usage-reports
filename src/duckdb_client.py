@@ -42,13 +42,37 @@ class DuckDB:
         }
         logging.info(f"Initializing DuckDB connection with db_path: {db_path}, config: {config}")
         conn = duckdb.connect(database=db_path, config=config)
-        threads_env = os.getenv("DUCKDB_THREADS", "4")
-        conn.execute(f"PRAGMA threads={int(threads_env)}")
-        logging.info(f"Set DuckDB threads to {threads_env}")
-        memory_env = os.getenv("DUCKDB_MEMORY_MB", "1536")
-        conn.execute(f"PRAGMA memory_limit='{int(memory_env)}MB'")
-        logging.info(f"Set DuckDB memory limit to {memory_env}MB (forces spilling to disk)")
-        temp_dir = conn.execute("PRAGMA temp_directory").fetchone()[0]
+        try:
+            version = conn.execute("SELECT version()").fetchone()[0]
+            logging.info(f"DuckDB version: {version}")
+        except Exception:
+            logging.warning("Could not determine DuckDB version")
+        try:
+            threads_env = os.getenv("DUCKDB_THREADS", "4")
+            threads = int(threads_env)
+            conn.execute(f"PRAGMA threads={threads}")
+            logging.info(f"Set DuckDB threads to {threads}")
+        except (ValueError, TypeError) as e:
+            logging.warning(f"Invalid DUCKDB_THREADS value '{threads_env}', using default: {e}")
+        try:
+            memory_env = os.getenv("DUCKDB_MEMORY_MB", "1536")
+            memory_mb = int(memory_env)
+            conn.execute(f"PRAGMA memory_limit='{memory_mb}MB'")
+            logging.info(f"Set DuckDB memory limit to {memory_mb}MB (forces spilling to disk)")
+        except (ValueError, TypeError) as e:
+            logging.warning(f"Invalid DUCKDB_MEMORY_MB value '{memory_env}', using default: {e}")
+        temp_dir = DUCK_DB_DIR
+        try:
+            result = conn.execute("SELECT value FROM duckdb_settings() WHERE name='temp_directory'").fetchone()
+            if result:
+                temp_dir = result[0]
+        except Exception:
+            try:
+                result = conn.execute("PRAGMA temp_directory").fetchone()
+                if result:
+                    temp_dir = result[0]
+            except Exception:
+                pass
         logging.info(f"DuckDB temp_directory: {temp_dir}")
         return conn
 
@@ -67,15 +91,19 @@ class DuckDB:
         self.con.execute(f"SET s3_secret_access_key='{self.config.aws_parameters.api_key_secret}';")
 
         if self.config.debug:
-            threads = self.con.execute("PRAGMA threads").fetchone()[0]
-            memory_limit = self.con.execute("PRAGMA memory_limit").fetchone()[0]
-            logging.debug(f"DuckDB effective settings - threads: {threads}, memory_limit: {memory_limit}")
+            try:
+                threads = self.con.execute("PRAGMA threads").fetchone()[0]
+                memory_limit = self.con.execute("PRAGMA memory_limit").fetchone()[0]
+                logging.debug(f"DuckDB effective settings - threads: {threads}, memory_limit: {memory_limit}")
+            except Exception as e:
+                logging.debug(f"Could not read DuckDB settings: {e}")
 
     def load_csv_files_bulk(self, csv_patterns: list[str], batch_size: int = 10) -> bool:
         """Load CSV files from mixed patterns (S3 and local) using DuckDB bulk loading with batching.
 
         Loads files in batches to avoid OOM errors with large datasets.
         Each batch is loaded and committed before the next batch starts.
+        Uses first batch to infer schema for version compatibility.
         """
         if not csv_patterns:
             logging.info("No CSV patterns to load")
@@ -88,25 +116,34 @@ class DuckDB:
             f"in {total_batches} batches of {batch_size}..."
         )
         try:
-            self.con.execute(
-                f"CREATE TABLE IF NOT EXISTS {RAW_REPORTS_TABLE} AS "
-                f"SELECT * FROM read_csv_auto([''], HEADER=TRUE, ALL_VARCHAR=TRUE, "
-                f"union_by_name=true, filename=true) LIMIT 0;"
-            )
+            table_created = False
             for batch_num, i in enumerate(range(0, len(csv_patterns), batch_size), 1):
                 batch = csv_patterns[i:i + batch_size]
                 patterns_str = "', '".join(batch)
                 logging.info(f"Loading batch {batch_num}/{total_batches}: {len(batch)} files")
-                self.con.execute(f"""
-                    INSERT INTO {RAW_REPORTS_TABLE}
-                    SELECT *
-                    FROM read_csv_auto(['{patterns_str}'],
-                                       HEADER=TRUE,
-                                       ALL_VARCHAR=TRUE,
-                                       NULLSTR=['null', 'NULL', 'None'],
-                                       union_by_name=true,
-                                       filename=true);
-                """)
+                if not table_created:
+                    self.con.execute(f"""
+                        CREATE TABLE {RAW_REPORTS_TABLE} AS
+                        SELECT *
+                        FROM read_csv_auto(['{patterns_str}'],
+                                           HEADER=TRUE,
+                                           ALL_VARCHAR=TRUE,
+                                           NULLSTR=['null', 'NULL', 'None'],
+                                           union_by_name=true,
+                                           filename=true);
+                    """)
+                    table_created = True
+                else:
+                    self.con.execute(f"""
+                        INSERT INTO {RAW_REPORTS_TABLE}
+                        SELECT *
+                        FROM read_csv_auto(['{patterns_str}'],
+                                           HEADER=TRUE,
+                                           ALL_VARCHAR=TRUE,
+                                           NULLSTR=['null', 'NULL', 'None'],
+                                           union_by_name=true,
+                                           filename=true);
+                    """)
                 row_count = self.con.execute(f"SELECT COUNT(*) FROM {RAW_REPORTS_TABLE}").fetchone()[0]
                 logging.info(f"Batch {batch_num}/{total_batches} loaded. Total rows: {row_count}")
             return True
