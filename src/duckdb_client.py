@@ -31,36 +31,34 @@ class DuckDB:
         Uses on-disk database to avoid OOM with large datasets.
         Sets conservative memory limits to force spilling to disk.
         Optional overrides via DUCKDB_THREADS and DUCKDB_MEMORY_MB environment variables.
+        Aligns with processor-duckdb config style for cross-version compatibility.
         """
         os.makedirs(DUCK_DB_DIR, exist_ok=True)
         if db_path is None:
             db_path = os.path.join(DUCK_DB_DIR, "work.duckdb")
+        threads = os.getenv("DUCKDB_THREADS", "4")
+        memory = os.getenv("DUCKDB_MEMORY_MB", "1536")
+        if not memory.endswith("MB") and not memory.endswith("GB"):
+            try:
+                memory = f"{int(memory)}MB"
+            except (ValueError, TypeError):
+                logging.warning(f"Invalid DUCKDB_MEMORY_MB value '{memory}', using default 1536MB")
+                memory = "1536MB"
         config = {
             "temp_directory": DUCK_DB_DIR,
             "extension_directory": os.path.join(DUCK_DB_DIR, "extensions"),
-            "preserve_insertion_order": False,
+            "threads": threads,
+            "memory_limit": memory,
+            "max_memory": memory,
         }
-        logging.info(f"Initializing DuckDB connection with db_path: {db_path}, config: {config}")
+        logging.info(f"Initializing DuckDB connection with db_path: {db_path}")
+        logging.info(f"DuckDB config: threads={threads}, memory_limit={memory}, temp_directory={DUCK_DB_DIR}")
         conn = duckdb.connect(database=db_path, config=config)
         try:
             version = conn.execute("SELECT version()").fetchone()[0]
             logging.info(f"DuckDB version: {version}")
         except Exception:
             logging.warning("Could not determine DuckDB version")
-        try:
-            threads_env = os.getenv("DUCKDB_THREADS", "4")
-            threads = int(threads_env)
-            conn.execute(f"PRAGMA threads={threads}")
-            logging.info(f"Set DuckDB threads to {threads}")
-        except (ValueError, TypeError) as e:
-            logging.warning(f"Invalid DUCKDB_THREADS value '{threads_env}', using default: {e}")
-        try:
-            memory_env = os.getenv("DUCKDB_MEMORY_MB", "1536")
-            memory_mb = int(memory_env)
-            conn.execute(f"PRAGMA memory_limit='{memory_mb}MB'")
-            logging.info(f"Set DuckDB memory limit to {memory_mb}MB (forces spilling to disk)")
-        except (ValueError, TypeError) as e:
-            logging.warning(f"Invalid DUCKDB_MEMORY_MB value '{memory_env}', using default: {e}")
         temp_dir = DUCK_DB_DIR
         try:
             result = conn.execute("SELECT value FROM duckdb_settings() WHERE name='temp_directory'").fetchone()
