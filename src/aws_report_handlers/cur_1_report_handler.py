@@ -34,8 +34,11 @@ class CUR1ReportHandler(BaseReportHandler):
         Supports both structures:
         - .../YYYYMMDD-YYYYMMDD/report-Manifest.json
         - .../YYYYMMDD-YYYYMMDD/timestampZ/report-Manifest.json
+
+        For nested structures with multiple timestamps per period, only the latest
+        manifest (by LastModified) is kept to avoid loading duplicate data.
         """
-        manifests = []
+        manifests_by_period = {}
         manifest_file_pattern = f"{report_name}-Manifest.json"
 
         for s3_object in s3_objects:
@@ -69,9 +72,23 @@ class CUR1ReportHandler(BaseReportHandler):
                         f"cur1-{parent_folder_name}-{manifest.get('account', 'unknown')}",
                     )
 
-                manifests.append(manifest)
+                period_key = parent_folder_name
+                if period_key not in manifests_by_period:
+                    manifests_by_period[period_key] = manifest
+                else:
+                    existing_manifest = manifests_by_period[period_key]
+                    if manifest["last_modified"] > existing_manifest["last_modified"]:
+                        manifests_by_period[period_key] = manifest
 
-        logging.info(f"Found {len(manifests)} CUR 1.0 manifests")
+        manifests = list(manifests_by_period.values())
+        total_manifests_before_dedup = sum(1 for obj in s3_objects if obj["Key"].endswith(manifest_file_pattern))
+        logging.info(
+            f"Found {total_manifests_before_dedup} total manifests, "
+            f"deduplicated to {len(manifests)} (one per period)"
+        )
+        if len(manifests_by_period) > 0:
+            sample_periods = list(manifests_by_period.keys())[:5]
+            logging.info(f"Sample periods: {sample_periods}")
         return manifests
 
     def get_csv_patterns(self, manifests: list[dict]) -> list[str]:

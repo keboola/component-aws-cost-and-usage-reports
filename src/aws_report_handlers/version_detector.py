@@ -48,20 +48,14 @@ class ReportVersionDetector:
             logging.info(f"[VERSION DETECTION] Metadata folder keys: {metadata_keys}")
             logging.info("Detected modern report format (CUR 2.0) - found metadata folder")
             return "modern"
-        has_gzip_files = any(obj["Key"].endswith(".csv.gz") for obj in s3_objects)
         has_zip_files = any(obj["Key"].endswith(".csv.zip") for obj in s3_objects)
-        logging.info(f"[VERSION DETECTION] has_gzip_files: {has_gzip_files}, has_zip_files: {has_zip_files}")
-        if has_gzip_files:
-            gzip_keys = [obj["Key"] for obj in s3_objects if obj["Key"].endswith(".csv.gz")][:3]
-            logging.info(f"[VERSION DETECTION] GZIP file keys: {gzip_keys}")
-            logging.info("Detected modern report format (CUR 2.0) - found GZIP files")
-            return "modern"
+        logging.info(f"[VERSION DETECTION] has_zip_files (CUR 1.0 indicator): {has_zip_files}")
         if has_zip_files:
             zip_keys = [obj["Key"] for obj in s3_objects if obj["Key"].endswith(".csv.zip")][:3]
             logging.info(f"[VERSION DETECTION] ZIP file keys: {zip_keys}")
             logging.info("Detected legacy report format (CUR 1.0) - found ZIP files")
             return "legacy"
-        logging.warning("Could not determine CUR version from S3 structure, defaulting to legacy (CUR 1.0)")
+        logging.info("[VERSION DETECTION] No specific indicators found, defaulting to legacy (CUR 1.0)")
         return "legacy"
 
     @staticmethod
