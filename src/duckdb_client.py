@@ -36,8 +36,8 @@ class DuckDB:
         os.makedirs(DUCK_DB_DIR, exist_ok=True)
         if db_path is None:
             db_path = os.path.join(DUCK_DB_DIR, "work.duckdb")
-        threads = os.getenv("DUCKDB_THREADS", "4")
-        memory = os.getenv("DUCKDB_MEMORY_MB", "1536")
+        threads = os.getenv("DUCKDB_THREADS", "2")
+        memory = os.getenv("DUCKDB_MEMORY_MB", "1024")
         if not memory.endswith("MB") and not memory.endswith("GB"):
             try:
                 memory = f"{int(memory)}MB"
@@ -96,7 +96,7 @@ class DuckDB:
             except Exception as e:
                 logging.debug(f"Could not read DuckDB settings: {e}")
 
-    def load_csv_files_bulk(self, csv_patterns: list[str], batch_size: int = 10) -> bool:
+    def load_csv_files_bulk(self, csv_patterns: list[str], batch_size: int = 2) -> bool:
         """Load CSV files from mixed patterns (S3 and local) using DuckDB bulk loading with batching.
 
         Loads files in batches to avoid OOM errors with large datasets.
@@ -128,7 +128,8 @@ class DuckDB:
                                            ALL_VARCHAR=TRUE,
                                            NULLSTR=['null', 'NULL', 'None'],
                                            union_by_name=true,
-                                           filename=true);
+                                           filename=true,
+                                           PARALLEL=FALSE);
                     """)
                     table_created = True
                 else:
@@ -155,10 +156,12 @@ class DuckDB:
                                            ALL_VARCHAR=TRUE,
                                            NULLSTR=['null', 'NULL', 'None'],
                                            union_by_name=true,
-                                           filename=true);
+                                           filename=true,
+                                           PARALLEL=FALSE);
                     """)
                 row_count = self.con.execute(f"SELECT COUNT(*) FROM {RAW_REPORTS_TABLE}").fetchone()[0]
                 logging.info(f"Batch {batch_num}/{total_batches} loaded. Total rows: {row_count}")
+                self.con.execute("CHECKPOINT;")
             return True
         except Exception as e:
             logging.error(f"Failed to load CSV files bulk: {e}")
@@ -173,7 +176,8 @@ class DuckDB:
                                    HEADER=TRUE,
                                    ALL_VARCHAR=TRUE,
                                    union_by_name=true,
-                                   filename=true)
+                                   filename=true,
+                                   PARALLEL=FALSE)
                 LIMIT 0;
             """).fetchall()
             return [row[0] for row in result]
