@@ -26,46 +26,142 @@ class CUR1ReportHandler(BaseReportHandler):
     def __init__(self, s3_client, bucket: str, report_prefix: str):
         super().__init__(s3_client, bucket, report_prefix)
 
+    def _is_manifest_file(self, s3_key: str, manifest_pattern: str) -> bool:
+        """
+        Check if S3 key is a manifest file.
+
+        Args:
+            s3_key: S3 object key
+            manifest_pattern: Expected manifest filename pattern
+
+        Returns:
+            True if the key ends with the manifest pattern
+        """
+        return s3_key.split("/")[-1] == manifest_pattern
+
+    def _extract_period_from_path(self, key_parts: list[str]) -> tuple[str | None, datetime | None]:
+        """
+        Extract billing period folder from S3 key path.
+
+        Supports both structures:
+        - .../YYYYMMDD-YYYYMMDD/report-Manifest.json (parent folder)
+        - .../YYYYMMDD-YYYYMMDD/timestampZ/report-Manifest.json (grandparent folder)
+
+        Args:
+            key_parts: S3 key split by "/"
+
+        Returns:
+            Tuple of (period_folder_name, start_date) or (None, None) if not found
+        """
+        parent_folder_name = key_parts[-2]
+        start_date, _ = self._try_parse_billing_period_from_folder_name(parent_folder_name)
+
+        if not start_date and len(key_parts) >= 3:
+            grandparent_folder_name = key_parts[-3]
+            start_date, _ = self._try_parse_billing_period_from_folder_name(grandparent_folder_name)
+            if start_date:
+                return grandparent_folder_name, start_date
+
+        if start_date:
+            return parent_folder_name, start_date
+
+        return None, None
+
+    def _load_and_enrich_manifest(
+        self, s3_object: dict, period_folder: str, manifest_pattern: str
+    ) -> dict[str, Any]:
+        """
+        Load manifest JSON from S3 and enrich with metadata.
+
+        Args:
+            s3_object: S3 object dict with Key and LastModified
+            period_folder: Billing period folder name (e.g., "20240101-20240131")
+            manifest_pattern: Manifest filename pattern
+
+        Returns:
+            Enriched manifest dict with metadata fields
+        """
+        manifest_content = self._read_s3_file_contents(s3_object["Key"])
+        manifest = json.loads(manifest_content)
+
+        manifest["last_modified"] = s3_object["LastModified"]
+        manifest["report_folder"] = s3_object["Key"].replace(f"/{manifest_pattern}", "")
+        manifest["period"] = period_folder
+        manifest["format_version"] = "1.0"
+
+        if "assemblyId" not in manifest:
+            manifest["assemblyId"] = manifest.get(
+                "reportId",
+                f"cur1-{period_folder}-{manifest.get('account', 'unknown')}",
+            )
+
+        return manifest
+
+    def _deduplicate_manifests_by_period(
+        self, manifests_by_period: dict[str, dict], s3_objects: list[dict], manifest_pattern: str
+    ) -> list[dict[str, Any]]:
+        """
+        Deduplicate manifests and log summary.
+
+        For periods with multiple manifests, keeps only the latest by LastModified.
+
+        Args:
+            manifests_by_period: Dict mapping period folder to manifest
+            s3_objects: All S3 objects (for counting total manifests)
+            manifest_pattern: Manifest filename pattern (for counting)
+
+        Returns:
+            List of deduplicated manifests
+        """
+        manifests = list(manifests_by_period.values())
+        total_manifests_before_dedup = sum(1 for obj in s3_objects if obj["Key"].endswith(manifest_pattern))
+
+        logging.info(
+            f"Found {total_manifests_before_dedup} total manifests, "
+            f"deduplicated to {len(manifests)} (one per period)"
+        )
+
+        if manifests_by_period:
+            sample_periods = list(manifests_by_period.keys())[:5]
+            logging.info(f"Sample periods: {sample_periods}")
+
+        return manifests
+
     def retrieve_manifests(self, s3_objects: list[dict], report_name: str) -> list[dict[str, Any]]:
         """
         Retrieve and parse CUR 1.0 manifest files from S3 objects.
 
-        CUR 1.0 manifests are located in the root of report folders with
-        date-based naming (YYYYMMDD-YYYYMMDD).
+        CUR 1.0 manifests are located in report folders with date-based naming.
+        Supports both structures:
+        - .../YYYYMMDD-YYYYMMDD/report-Manifest.json
+        - .../YYYYMMDD-YYYYMMDD/timestampZ/report-Manifest.json
+
+        For nested structures with multiple timestamps per period, only the latest
+        manifest (by LastModified) is kept to avoid loading duplicate data.
         """
-        manifests = []
+        manifests_by_period = {}
         manifest_file_pattern = f"{report_name}-Manifest.json"
 
         for s3_object in s3_objects:
-            object_name = s3_object["Key"].split("/")[-1]
-            parent_folder_name = s3_object["Key"].split("/")[-2]
+            if not self._is_manifest_file(s3_object["Key"], manifest_file_pattern):
+                continue
 
-            # Try to parse billing period from folder name (YYYYMMDD-YYYYMMDD format)
-            # Used only to identify valid report folders (gate), not to mutate manifest content
-            start_date, end_date = self._try_parse_billing_period_from_folder_name(parent_folder_name)
+            key_parts = s3_object["Key"].split("/")
+            period_folder, start_date = self._extract_period_from_path(key_parts)
 
-            # Process only root-level manifest files for valid billing periods
-            if start_date and object_name == manifest_file_pattern:
-                # Download and parse manifest JSON
-                manifest_content = self._read_s3_file_contents(s3_object["Key"])
-                manifest = json.loads(manifest_content)
+            if not start_date:
+                continue
 
-                # Enrich with additional metadata for processing
-                manifest["last_modified"] = s3_object["LastModified"]
-                manifest["report_folder"] = s3_object["Key"].replace(f"/{manifest_file_pattern}", "")
-                manifest["period"] = parent_folder_name
-                manifest["format_version"] = "1.0"
-                # Ensure assemblyId exists (fallback to reportId or generate one)
-                if "assemblyId" not in manifest:
-                    manifest["assemblyId"] = manifest.get(
-                        "reportId",
-                        f"cur1-{parent_folder_name}-{manifest.get('account', 'unknown')}",
-                    )
+            manifest = self._load_and_enrich_manifest(s3_object, period_folder, manifest_file_pattern)
 
-                manifests.append(manifest)
+            if period_folder not in manifests_by_period:
+                manifests_by_period[period_folder] = manifest
+            else:
+                existing_manifest = manifests_by_period[period_folder]
+                if manifest["last_modified"] > existing_manifest["last_modified"]:
+                    manifests_by_period[period_folder] = manifest
 
-        logging.info(f"Found {len(manifests)} CUR 1.0 manifests")
-        return manifests
+        return self._deduplicate_manifests_by_period(manifests_by_period, s3_objects, manifest_file_pattern)
 
     def get_csv_patterns(self, manifests: list[dict]) -> list[str]:
         """
@@ -75,17 +171,15 @@ class CUR1ReportHandler(BaseReportHandler):
         """
         patterns = []
 
-        # Separate ZIP and CSV manifests for different processing
         csv_manifests = [m for m in manifests if not self._manifest_contains_zip_files(m)]
         zip_manifests = [m for m in manifests if self._manifest_contains_zip_files(m)]
 
-        # Process direct CSV patterns
         for manifest in csv_manifests:
-            base_path = manifest["report_folder"]
-            pattern = f"s3://{self.bucket}/{base_path}/*.csv"
-            patterns.append(pattern)
+            report_keys = manifest.get("reportKeys", [])
+            for key in report_keys:
+                if key.endswith(".csv") or key.endswith(".csv.gz"):
+                    patterns.append(f"s3://{self.bucket}/{key}")
 
-        # Process ZIP files in parallel
         if zip_manifests:
             extracted_paths = self._extract_all_zip_files_parallel(zip_manifests)
             patterns.extend(extracted_paths)

@@ -74,6 +74,107 @@ class CUR2ReportHandler(BaseReportHandler):
         logging.info(f"Found {len(manifests)} CUR 2.0 manifests")
         return manifests
 
+    def _get_files_from_manifest(self, manifest: dict) -> tuple[list[str], list[str]]:
+        """
+        Extract file lists from manifest.
+
+        CUR 2.0 uses 'dataFiles' (newer) or 'reportKeys' (older fallback).
+
+        Args:
+            manifest: Manifest dict with dataFiles and/or reportKeys
+
+        Returns:
+            Tuple of (gzip_files, csv_files)
+        """
+        data_files = manifest.get("dataFiles", [])
+        report_keys = manifest.get("reportKeys", [])
+        files_to_process = data_files or report_keys
+
+        logging.info(
+            f"Processing manifest: base_path='{manifest['report_folder']}', "
+            f"dataFiles={len(data_files)}, reportKeys={len(report_keys)}"
+        )
+
+        gzip_files = [f for f in files_to_process if f.endswith(".gz")]
+        csv_files = [f for f in files_to_process if f.endswith(".csv")]
+
+        return gzip_files, csv_files
+
+    def _process_gzip_files(self, gzip_files: list[str], base_path: str) -> list[str]:
+        """
+        Download and extract GZIP files, return local paths.
+
+        Args:
+            gzip_files: List of GZIP file paths (S3 URLs or relative paths)
+            base_path: Base S3 path for relative file paths
+
+        Returns:
+            List of local file paths to extracted CSVs
+        """
+        patterns = []
+
+        for gzip_file in gzip_files:
+            if gzip_file.startswith("s3://"):
+                s3_key = gzip_file.replace(f"s3://{self.bucket}/", "")
+            else:
+                s3_key = f"{base_path}/{gzip_file}" if base_path else gzip_file
+
+            logging.info(f"Attempting to extract GZIP file: {s3_key}")
+
+            try:
+                extracted_path = self._download_and_extract_gzip(s3_key)
+                patterns.append(extracted_path)
+                logging.info(f"Successfully extracted {s3_key} to {extracted_path}")
+            except Exception as e:
+                logging.error(f"Failed to extract GZIP file {s3_key}: {e}")
+                logging.warning(f"Skipping {s3_key} (extraction failed)")
+                continue
+
+        return patterns
+
+    def _process_csv_files(self, csv_files: list[str], base_path: str) -> list[str]:
+        """
+        Build S3 patterns for direct CSV files.
+
+        Args:
+            csv_files: List of CSV file paths (S3 URLs or relative paths)
+            base_path: Base S3 path for relative file paths
+
+        Returns:
+            List of S3 patterns for CSV files
+        """
+        patterns = []
+
+        for csv_file in csv_files:
+            if csv_file.startswith("s3://"):
+                patterns.append(csv_file)
+            else:
+                if base_path:
+                    pattern = f"s3://{self.bucket}/{base_path}/{csv_file}"
+                else:
+                    pattern = f"s3://{self.bucket}/{csv_file}"
+                patterns.append(pattern)
+
+        return patterns
+
+    def _build_fallback_pattern(self, manifest: dict) -> str:
+        """
+        Build wildcard pattern when manifest has no file list.
+
+        Args:
+            manifest: Manifest dict with period and report_folder
+
+        Returns:
+            S3 wildcard pattern for the billing period
+        """
+        period = manifest["period"]
+        base_path = manifest["report_folder"]
+
+        if base_path:
+            return f"s3://{self.bucket}/{base_path}/data/BILLING_PERIOD={period}/*.csv.gz"
+        else:
+            return f"s3://{self.bucket}/data/BILLING_PERIOD={period}/*.csv.gz"
+
     def get_csv_patterns(self, manifests: list[dict]) -> list[str]:
         """
         Generate CSV file patterns for CUR 2.0 manifests.
@@ -83,68 +184,22 @@ class CUR2ReportHandler(BaseReportHandler):
         patterns = []
 
         for manifest in manifests:
+            gzip_files, csv_files = self._get_files_from_manifest(manifest)
             base_path = manifest["report_folder"]
-            # CUR 2.0 uses 'dataFiles' instead of 'reportKeys'
-            data_files = manifest.get("dataFiles", [])
-            report_keys = manifest.get("reportKeys", [])  # Fallback for older format
-            files_to_process = data_files or report_keys
-            logging.info(
-                f"Processing manifest: base_path='{base_path}', "
-                f"dataFiles={len(data_files)}, reportKeys={len(report_keys)}"
-            )
 
-            if files_to_process:
-                # Check if files are GZIP - if so, download and extract them locally
-                gzip_files = [f for f in files_to_process if f.endswith(".gz")]
-                csv_files = [f for f in files_to_process if f.endswith(".csv")]
-                # Handle GZIP files - download and extract locally
-                for gzip_file in gzip_files:
-                    # Extract S3 key from full URL for dataFiles, or use directly for reportKeys
-                    if gzip_file.startswith("s3://"):
-                        # dataFiles format: s3://bucket/path/file.gz
-                        s3_key = gzip_file.replace(f"s3://{self.bucket}/", "")
-                    else:
-                        # reportKeys format: relative path
-                        if base_path:
-                            s3_key = f"{base_path}/{gzip_file}"
-                        else:
-                            s3_key = gzip_file
-                    logging.info(f"Attempting to extract GZIP file: {s3_key}")
-                    try:
-                        extracted_path = self._download_and_extract_gzip(s3_key)
-                        patterns.append(extracted_path)
-                        logging.info(f"Successfully extracted {s3_key} to {extracted_path}")
-                    except Exception as e:
-                        logging.error(f"Failed to extract GZIP file {s3_key}: {e}")
-                        logging.warning(f"Falling back to S3 pattern for {s3_key} (this may fail with DuckDB)")
-                        # Don't add fallback S3 pattern - it will fail anyway
-                        # Instead, try alternative approach or skip this file
-                        continue
-                # Handle direct CSV files
-                for csv_file in csv_files:
-                    if csv_file.startswith("s3://"):
-                        # Use the S3 URL directly
-                        patterns.append(csv_file)
-                    else:
-                        # Build S3 pattern for relative paths
-                        if base_path:
-                            pattern = f"s3://{self.bucket}/{base_path}/{csv_file}"
-                        else:
-                            pattern = f"s3://{self.bucket}/{csv_file}"
-                        patterns.append(pattern)
+            if gzip_files or csv_files:
+                patterns.extend(self._process_gzip_files(gzip_files, base_path))
+                patterns.extend(self._process_csv_files(csv_files, base_path))
             else:
-                # Fallback to wildcard pattern if no reportKeys
-                period = manifest["period"]
-                if base_path:
-                    pattern = f"s3://{self.bucket}/{base_path}/data/BILLING_PERIOD={period}/*.csv.gz"
-                else:
-                    pattern = f"s3://{self.bucket}/data/BILLING_PERIOD={period}/*.csv.gz"
-                patterns.append(pattern)
+                fallback_pattern = self._build_fallback_pattern(manifest)
+                patterns.append(fallback_pattern)
 
         logging.info(f"Generated {len(patterns)} CSV patterns for CUR 2.0")
+
         if not patterns:
             logging.error("No CSV patterns could be generated for CUR 2.0 manifests")
             raise ValueError("No valid CSV files found in CUR 2.0 manifests")
+
         return patterns
 
     def normalize_columns(self, manifest: dict) -> list[str]:

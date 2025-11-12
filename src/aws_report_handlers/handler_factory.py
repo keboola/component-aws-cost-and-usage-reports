@@ -34,7 +34,6 @@ class ReportHandlerFactory:
         Returns:
             Appropriate handler instance (CUR1ReportHandler or CUR2ReportHandler)
         """
-        # If no S3 objects provided, create a temporary handler to fetch them
         if s3_objects is None:
             temp_handler = CUR1ReportHandler(s3_client, bucket, report_prefix)
             s3_objects = list(temp_handler.get_s3_objects())

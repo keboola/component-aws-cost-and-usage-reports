@@ -1,20 +1,10 @@
 import logging
-import os
 
 import duckdb
-from duckdb import DuckDBPyConnection
 
 from configuration import Configuration
 
-# DuckDB temporary directory configuration
-DUCK_DB_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "duckdb")
-
-# DuckDB table and view names
-RAW_REPORTS_TABLE = "raw_reports"
 UNIFIED_REPORTS_VIEW = "unified_reports"
-
-# DuckDB metadata column names
-FILENAME_COLUMN = "filename"
 
 
 class DuckDB:
@@ -23,113 +13,167 @@ class DuckDB:
     def __init__(self, config: Configuration):
         self.config = config
         self.con = None
-
-    @staticmethod
-    def _init_connection(threads: int = 4, max_memory: int = 1024, db_path: str = ":memory:") -> DuckDBPyConnection:
-        """
-        Returns connection to temporary DuckDB database with advanced
-        optimizations. DuckDB supports thread-safe access to a single
-        connection.
-        """
-        os.makedirs(DUCK_DB_DIR, exist_ok=True)
-        # Enhanced configuration with performance optimizations
-        # Using only definitely valid DuckDB configuration parameters
-        config = {
-            # Basic settings
-            "temp_directory": DUCK_DB_DIR,
-            "threads": threads,
-            "max_memory": f"{max_memory}MB",
-            "extension_directory": os.path.join(DUCK_DB_DIR, "extensions"),
-            # Performance optimizations
-            "preserve_insertion_order": False,  # Faster inserts
-        }
-
-        logging.info(f"Initializing DuckDB connection with config: {config}")
-        conn = duckdb.connect(database=db_path, config=config)
-        return conn
+        self.db_path = "/tmp/cur.duckdb"
 
     def setup_connection(self):
-        """Setup DuckDB connection with S3 credentials and performance
-        optimizations."""
-        if self.con:
-            return  # already setup
+        """
+        Setup DuckDB connection with S3 credentials.
 
-        logging.info("Setting up DuckDB connection...")
-        self.con = self._init_connection()
+        Installs httpfs extension for S3 access and configures AWS credentials.
+        """
+        if self.con:
+            return
+
+        logging.info(f"Setting up DuckDB connection with db_path: {self.db_path}")
+        self.con = duckdb.connect(self.db_path)
+
+        try:
+            version = self.con.execute("SELECT version()").fetchone()[0]
+            logging.info(f"DuckDB version: {version}")
+        except Exception:
+            logging.warning("Could not determine DuckDB version")
+
+        self._apply_connection_settings()
+        logging.info("DuckDB connection ready with S3 credentials configured")
+
+    def _apply_connection_settings(self):
+        """
+        Apply S3 credentials and DuckDB settings to current connection.
+
+        Used both for initial setup and after connection resets.
+        Settings based on Martin's Shopify component configuration.
+        """
+        self.con.execute("SET extension_directory='/tmp/duckdb_extensions';")
         self.con.execute("INSTALL httpfs;")
         self.con.execute("LOAD httpfs;")
         self.con.execute(f"SET s3_region='{self.config.aws_parameters.aws_region}';")
         self.con.execute(f"SET s3_access_key_id='{self.config.aws_parameters.api_key_id}';")
         self.con.execute(f"SET s3_secret_access_key='{self.config.aws_parameters.api_key_secret}';")
 
-    def load_csv_files_bulk(self, csv_patterns: list[str]) -> bool:
-        """Load CSV files from mixed patterns (S3 and local) using DuckDB
-        bulk loading."""
-        if not csv_patterns:
-            logging.info("No CSV patterns to load")
-            return False
+        # DuckDB memory and performance settings
+        self.con.execute("SET temp_directory='/tmp/duckdb_temp';")
+        self.con.execute("SET preserve_insertion_order=false;")
+        self.con.execute("SET threads=1;")
 
-        patterns_str = "', '".join(csv_patterns)
-        s3_count = sum(1 for p in csv_patterns if p.startswith("s3://"))
-        local_count = len(csv_patterns) - s3_count
+    def close(self):
+        """
+        Close DuckDB connection and release all resources.
 
-        logging.info(f"Loading {len(csv_patterns)} CSV files ({s3_count} from S3, {local_count} local)...")
+        Call this after all processing is complete to free memory
+        before output mapping or other downstream operations.
+        """
+        if self.con:
+            logging.info("Closing DuckDB connection to release memory...")
+            self.con.close()
+            self.con = None
+            logging.info("DuckDB connection closed")
+
+    @staticmethod
+    def _quote_ident(name: str) -> str:
+        """
+        Quote SQL identifier with double quotes, escaping embedded quotes.
+
+        Handles column names with special characters (/, spaces, etc.) and embedded quotes.
+        Example: 'cost/usage' -> '"cost/usage"', 'name"with"quotes' -> '"name""with""quotes"'
+        """
+        return '"' + name.replace('"', '""') + '"'
+
+    def _get_read_csv_auto_options(self) -> str:
+        """
+        Return standardized read_csv_auto options for consistent CSV parsing.
+
+        Options:
+        - HEADER=TRUE: First row contains column names
+        - ALL_VARCHAR=TRUE: Load all columns as strings to avoid type inference issues
+        - NULLSTR: Treat these strings as NULL values
+        - filename=true: Add filename column for tracking source files
+        - PARALLEL=FALSE: Single-threaded parsing to reduce memory usage (important-comment)
+        """
+        return """HEADER=TRUE,
+                                           ALL_VARCHAR=TRUE,
+                                           NULLSTR=['null', 'NULL', 'None'],
+                                           filename=true,
+                                           PARALLEL=FALSE"""
+
+    def create_unified_view_from_files(self, csv_patterns: list[str], final_columns: list[str]) -> bool:
+        """
+        Create unified view directly from CSV files using read_csv_auto with union_by_name.
+
+        This approach avoids creating per-file views and building massive UNION ALL queries.
+        Instead, it uses DuckDB's union_by_name feature to read all files at once and
+        automatically handle schema evolution.
+
+        Args:
+            csv_patterns: List of CSV file paths (S3 URIs or local paths)
+            final_columns: List of final column names in KBC format (with __)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        import time
+        logging.info(f"Creating unified view from {len(csv_patterns)} CSV files using read_csv_auto...")
+        start_time = time.time()
 
         try:
+            file_list = ", ".join([f"'{pattern}'" for pattern in csv_patterns])
+
+            options = self._get_read_csv_auto_options()
+
             self.con.execute(f"""
-                CREATE TABLE {RAW_REPORTS_TABLE} AS
-                SELECT *
-                FROM read_csv_auto(['{patterns_str}'],
-                                   HEADER=TRUE,
-                                   ALL_VARCHAR=TRUE,
-                                   NULLSTR=['null', 'NULL', 'None'],
-                                   union_by_name=true,
-                                   filename=true);
+                CREATE OR REPLACE VIEW raw_unified AS
+                SELECT * EXCLUDE (filename)
+                FROM read_csv_auto([{file_list}],
+                                   {options},
+                                   union_by_name=true);
             """)
-            return True
-        except Exception as e:
-            logging.error(f"Failed to load CSV files bulk: {e}")
-            return False
 
-    def get_current_columns_from_table(self, table_name: str = RAW_REPORTS_TABLE) -> list[str]:
-        """Get current columns from DuckDB table."""
-        try:
-            columns = [
-                r[0]
-                for r in self.con.execute(f"DESCRIBE {table_name};").fetchall()
-                if r[0] != FILENAME_COLUMN  # filter out metadata column
-            ]
-            return columns
-        except Exception as e:
-            logging.error(f"Failed to get columns from table '{table_name}': {e}")
-            return []
+            # Build SELECT with column aliases
+            select_parts = []
+            for final_col in final_columns:
+                # Convert from KBC format (col__name) to original (col/name)
+                original_col = final_col.replace("__", "/")
+                quoted_original = self._quote_ident(original_col)
+                quoted_final = self._quote_ident(final_col)
 
-    def create_unified_view(self, final_columns: list[str], current_columns: list[str]) -> bool:
-        """Create a unified view with all columns."""
-        select_parts = []
+                select_parts.append(
+                    f'COALESCE({quoted_original}, NULL) AS {quoted_final}'
+                )
 
-        for col in final_columns:
-            # Convert back from KBC format to original
-            original_col = col.replace("__", "/")
-            if original_col in current_columns:
-                select_parts.append(f'"{original_col}" as "{col}"')
-            else:
-                select_parts.append(f'NULL as "{col}"')
+            select_sql = ",\n                ".join(select_parts)
 
-        select_sql = ", ".join(select_parts)
-
-        try:
             self.con.execute(f"""
-                CREATE VIEW {UNIFIED_REPORTS_VIEW} AS
+                CREATE OR REPLACE VIEW {UNIFIED_REPORTS_VIEW} AS
                 SELECT {select_sql}
-                FROM {RAW_REPORTS_TABLE};
+                FROM raw_unified;
             """)
+
+            elapsed = time.time() - start_time
+            logging.info(
+                f"Unified view created in {elapsed:.1f}s from {len(csv_patterns)} files "
+                f"with {len(final_columns)} columns."
+            )
+
             return True
+
         except Exception as e:
-            logging.error(f"Failed to create unified view: {e}")
+            logging.error(f"Failed to create unified view from files: {e}")
             return False
 
     def export_data_to_csv(self, output_path: str):
-        """Export data from DuckDB table to CSV file."""
-        self.con.execute(f"COPY {UNIFIED_REPORTS_VIEW} TO '{output_path}' (HEADER, DELIMITER ',');")
-        logging.info(f"Data exported to {output_path}")
+        """
+        Export data to CSV file using single COPY statement.
+
+        Exports entire unified view directly to output file in one pass.
+        """
+        import time
+        logging.info(f"Exporting data to {output_path}...")
+        start_time = time.time()
+
+        self.con.execute(f"""
+            COPY {UNIFIED_REPORTS_VIEW}
+            TO '{output_path}'
+            (HEADER, DELIMITER ',', FORCE_QUOTE *)
+        """)
+
+        elapsed = time.time() - start_time
+        logging.info(f"Export completed in {elapsed:.1f}s")
