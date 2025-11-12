@@ -10,7 +10,7 @@ from keboola.utils.header_normalizer import DictHeaderNormalizer
 
 from aws_report_handlers import ReportHandlerFactory
 from configuration import Configuration
-from duckdb_client import FILENAME_COLUMN, UNIFIED_REPORTS_VIEW, DuckDB
+from duckdb_client import DuckDB
 
 
 class Component(ComponentBase):
@@ -78,10 +78,10 @@ class Component(ComponentBase):
             report_manifests = self._discover_available_reports()
 
             # Step 3: Process the reports and export data
-            self._process_reports_unified_bulk(report_manifests)
+            final_columns = self._process_reports_unified_bulk(report_manifests)
 
             # Step 4: Write table manifest
-            self._write_table_manifest(self.export_output_path)
+            self._write_table_manifest(self.export_output_path, final_columns)
 
             # Step 5: Save final state
             self._save_final_state()
@@ -138,45 +138,32 @@ class Component(ComponentBase):
         return report_manifests
 
     def _process_reports_unified_bulk(self, report_manifests):
-        """New unified approach: extract all ZIP files in parallel, then
-        bulk load everything."""
-        logging.info(f"Processing {len(report_manifests)} reports using unified bulk approach...")
+        """Process reports using read_csv_auto with union_by_name for efficient processing."""
+        logging.info(f"Processing {len(report_manifests)} reports...")
 
-        # Step 1: Prepare all CSV patterns (S3 direct + extracted from
-        # ZIP files in parallel)
         all_csv_patterns = self.report_handler.get_csv_patterns(report_manifests)
-
         if not all_csv_patterns:
             logging.warning("No CSV files found to process")
             raise Exception("No CSV files found to process")
 
-        # Step 2: Update runtime state from manifests
         self._update_runtime_state_from_manifests(report_manifests)
 
-        # Step 3: Determine final column set for output table
         final_columns = self._get_max_header_normalized(report_manifests, self.last_header)
         self.last_header = final_columns
 
-        # Step 4: Bulk load all CSV files into DuckDB
-        # Setup DuckDB connection for processing
         self.duckdb_processor.setup_connection()
 
-        if not self.duckdb_processor.load_csv_files_bulk(all_csv_patterns):
-            raise Exception("Failed to load CSV files in bulk")
+        if not self.duckdb_processor.create_unified_view_from_files(all_csv_patterns, final_columns):
+            raise Exception("Failed to create unified view from files")
 
-        # Step 5: Get current columns from loaded data
-        current_columns = self.duckdb_processor.get_current_columns_from_table()
-
-        # Step 6: Create a simple unified view (all strings, no type
-        # conversion)
-        if not self.duckdb_processor.create_unified_view(final_columns, current_columns):
-            raise Exception("Failed to create unified view")
-
-        # Step 7: Export the data
         self.export_output_path = os.path.join(self.tables_out_path, f"{self.report_name}.csv")
         self.duckdb_processor.export_data_to_csv(self.export_output_path)
 
-        logging.info(f"Successfully processed {len(all_csv_patterns)} files using unified bulk approach")
+        self.duckdb_processor.close()
+
+        logging.info(f"Successfully processed {len(all_csv_patterns)} files")
+
+        return final_columns
 
     def _save_final_state(self):
         """Save the final execution state for future incremental runs."""
@@ -260,17 +247,12 @@ class Component(ComponentBase):
 
         return header
 
-    def _write_table_manifest(self, output_table):
+    def _write_table_manifest(self, output_table, final_columns):
         """Write table manifest with complete column information and data
         types."""
         table_name = os.path.basename(output_table)
         incremental = self.config.loading_options.incremental_output_bool
         pkey = self.config.loading_options.pkey
-
-        # Get column names from DuckDB table
-        columns = self.duckdb_processor.get_current_columns_from_table(UNIFIED_REPORTS_VIEW)
-        # Filter out metadata columns
-        schema_columns = [col for col in columns if col != FILENAME_COLUMN]
 
         # Create table definition with schema as list of strings
         # (defaults to STRING type)
@@ -278,7 +260,7 @@ class Component(ComponentBase):
             name=table_name,
             incremental=incremental,
             primary_key=pkey,
-            schema=schema_columns,
+            schema=final_columns,
             has_header=True,
         )
 
