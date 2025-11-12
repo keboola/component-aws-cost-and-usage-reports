@@ -55,15 +55,14 @@ class CUR1ReportHandler(BaseReportHandler):
         """
         parent_folder_name = key_parts[-2]
         start_date, _ = self._try_parse_billing_period_from_folder_name(parent_folder_name)
+        if start_date:
+            return parent_folder_name, start_date
 
-        if not start_date and len(key_parts) >= 3:
+        if len(key_parts) >= 3:
             grandparent_folder_name = key_parts[-3]
             start_date, _ = self._try_parse_billing_period_from_folder_name(grandparent_folder_name)
             if start_date:
                 return grandparent_folder_name, start_date
-
-        if start_date:
-            return parent_folder_name, start_date
 
         return None, None
 
@@ -90,34 +89,34 @@ class CUR1ReportHandler(BaseReportHandler):
         manifest["format_version"] = "1.0"
 
         if "assemblyId" not in manifest:
-            manifest["assemblyId"] = manifest.get(
-                "reportId",
-                f"cur1-{period_folder}-{manifest.get('account', 'unknown')}",
-            )
+            account = manifest.get("account", "unknown")
+            default_assembly_id = f"cur1-{period_folder}-{account}"
+            manifest["assemblyId"] = manifest.get("reportId", default_assembly_id)
 
         return manifest
 
-    def _deduplicate_manifests_by_period(
+    def _log_manifest_summary(
         self, manifests_by_period: dict[str, dict], s3_objects: list[dict], manifest_pattern: str
     ) -> list[dict[str, Any]]:
         """
-        Deduplicate manifests and log summary.
+        Log manifest summary and return list of manifests.
 
-        For periods with multiple manifests, keeps only the latest by LastModified.
+        Note: Deduplication already happened via dict keying in retrieve_manifests.
+        For periods with multiple manifests, only the latest by LastModified was kept.
 
         Args:
-            manifests_by_period: Dict mapping period folder to manifest
+            manifests_by_period: Dict mapping period folder to manifest (already deduplicated)
             s3_objects: All S3 objects (for counting total manifests)
             manifest_pattern: Manifest filename pattern (for counting)
 
         Returns:
-            List of deduplicated manifests
+            List of manifests (one per period)
         """
+        total_manifests_found = sum(1 for obj in s3_objects if obj["Key"].endswith(manifest_pattern))
         manifests = list(manifests_by_period.values())
-        total_manifests_before_dedup = sum(1 for obj in s3_objects if obj["Key"].endswith(manifest_pattern))
 
         logging.info(
-            f"Found {total_manifests_before_dedup} total manifests, "
+            f"Found {total_manifests_found} total manifests, "
             f"deduplicated to {len(manifests)} (one per period)"
         )
 
@@ -161,7 +160,7 @@ class CUR1ReportHandler(BaseReportHandler):
                 if manifest["last_modified"] > existing_manifest["last_modified"]:
                     manifests_by_period[period_folder] = manifest
 
-        return self._deduplicate_manifests_by_period(manifests_by_period, s3_objects, manifest_file_pattern)
+        return self._log_manifest_summary(manifests_by_period, s3_objects, manifest_file_pattern)
 
     def get_csv_patterns(self, manifests: list[dict]) -> list[str]:
         """

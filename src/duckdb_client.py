@@ -1,4 +1,5 @@
 import logging
+import time
 
 import duckdb
 
@@ -19,7 +20,7 @@ class DuckDB:
         """
         Setup DuckDB connection with S3 credentials.
 
-        Installs httpfs extension for S3 access and configures AWS credentials.
+        Configures connection and applies settings including httpfs extension installation.
         """
         if self.con:
             return
@@ -41,7 +42,6 @@ class DuckDB:
         Apply S3 credentials and DuckDB settings to current connection.
 
         Used both for initial setup and after connection resets.
-        Settings based on Martin's Shopify component configuration.
         """
         self.con.execute("SET extension_directory='/tmp/duckdb_extensions';")
         self.con.execute("INSTALL httpfs;")
@@ -110,7 +110,6 @@ class DuckDB:
         Returns:
             True if successful, False otherwise
         """
-        import time
         logging.info(f"Creating unified view from {len(csv_patterns)} CSV files using read_csv_auto...")
         start_time = time.time()
 
@@ -165,7 +164,6 @@ class DuckDB:
 
         Exports entire unified view directly to output file in one pass.
         """
-        import time
         logging.info(f"Exporting data to {output_path}...")
         start_time = time.time()
 
