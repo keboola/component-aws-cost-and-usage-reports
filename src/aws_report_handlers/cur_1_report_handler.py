@@ -95,37 +95,6 @@ class CUR1ReportHandler(BaseReportHandler):
 
         return manifest
 
-    def _log_manifest_summary(
-        self, manifests_by_period: dict[str, dict], s3_objects: list[dict], manifest_pattern: str
-    ) -> list[dict[str, Any]]:
-        """
-        Log manifest summary and return list of manifests.
-
-        Note: Deduplication already happened via dict keying in retrieve_manifests.
-        For periods with multiple manifests, only the latest by LastModified was kept.
-
-        Args:
-            manifests_by_period: Dict mapping period folder to manifest (already deduplicated)
-            s3_objects: All S3 objects (for counting total manifests)
-            manifest_pattern: Manifest filename pattern (for counting)
-
-        Returns:
-            List of manifests (one per period)
-        """
-        total_manifests_found = sum(1 for obj in s3_objects if obj["Key"].endswith(manifest_pattern))
-        manifests = list(manifests_by_period.values())
-
-        logging.info(
-            f"Found {total_manifests_found} total manifests, "
-            f"deduplicated to {len(manifests)} (one per period)"
-        )
-
-        if manifests_by_period:
-            sample_periods = list(manifests_by_period.keys())[:5]
-            logging.info(f"Sample periods: {sample_periods}")
-
-        return manifests
-
     def retrieve_manifests(self, s3_objects: list[dict], report_name: str) -> list[dict[str, Any]]:
         """
         Retrieve and parse CUR 1.0 manifest files from S3 objects.
@@ -135,8 +104,7 @@ class CUR1ReportHandler(BaseReportHandler):
         - .../YYYYMMDD-YYYYMMDD/report-Manifest.json
         - .../YYYYMMDD-YYYYMMDD/timestampZ/report-Manifest.json
 
-        For nested structures with multiple timestamps per period, only the latest
-        manifest (by LastModified) is kept to avoid loading duplicate data.
+        If multiple manifests exist for the same period, keeps only the latest by LastModified.
         """
         manifests_by_period = {}
         manifest_file_pattern = f"{report_name}-Manifest.json"
@@ -160,7 +128,19 @@ class CUR1ReportHandler(BaseReportHandler):
                 if manifest["last_modified"] > existing_manifest["last_modified"]:
                     manifests_by_period[period_folder] = manifest
 
-        return self._log_manifest_summary(manifests_by_period, s3_objects, manifest_file_pattern)
+        total_found = sum(1 for obj in s3_objects if obj["Key"].endswith(manifest_file_pattern))
+        selected = len(manifests_by_period)
+
+        if selected:
+            sample_periods = list(manifests_by_period.keys())[:5]
+            logging.info(
+                f"Found {total_found} manifests; selected {selected} (one per period folder). "
+                f"Sample periods: {sample_periods}"
+            )
+        else:
+            logging.info(f"Found {total_found} manifests; selected 0")
+
+        return list(manifests_by_period.values())
 
     def get_csv_patterns(self, manifests: list[dict]) -> list[str]:
         """
