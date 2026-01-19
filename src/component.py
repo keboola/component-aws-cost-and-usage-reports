@@ -199,6 +199,32 @@ class Component(ComponentBase):
                     "assemblyId", manifest.get("reportId", manifest.get("period", "unknown"))
                 )
 
+    def _deduplicate_case_insensitive(self, columns: list[str]) -> list[str]:
+        """Deduplicate columns case-insensitively, adding _1, _2 suffixes.
+
+        When AWS resource tags differ only by casing (e.g., 'resourceTags/user:owner'
+        vs 'resourceTags/user:Owner'), this method ensures they are deduplicated with
+        numeric suffixes to prevent failures in Keboola Storage which is case-insensitive.
+
+        Args:
+            columns: List of column names to deduplicate
+
+        Returns:
+            List of deduplicated column names where case-variant duplicates
+            have _1, _2, etc. suffixes added
+        """
+        seen: dict[str, tuple[str, int]] = {}  # lowercase -> (original_name, count)
+        result: list[str] = []
+        for col in columns:
+            lower_col = col.lower()
+            if lower_col in seen:
+                seen[lower_col] = (seen[lower_col][0], seen[lower_col][1] + 1)
+                result.append(f"{col}_{seen[lower_col][1]}")
+            else:
+                seen[lower_col] = (col, 0)
+                result.append(col)
+        return result
+
     def _get_manifest_normalized_columns(self, manifest):
         """Extract and normalize column names from manifest metadata."""
         # Get raw column names using the appropriate handler
@@ -207,8 +233,8 @@ class Component(ComponentBase):
         # Normalize column names using HeaderNormalizer
         normalized_columns = self.column_normalizer.normalize_header(raw_columns)
 
-        # Remove duplicates - use set to remove duplicates then sort
-        return sorted(list(set(normalized_columns)))
+        # Remove case-insensitive duplicates with suffix indexing
+        return sorted(self._deduplicate_case_insensitive(normalized_columns))
 
     def _get_max_header_normalized(self, manifests, current_header):
         """Build normalized column schema from all manifests."""
