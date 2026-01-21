@@ -25,27 +25,27 @@ class ReportVersionDetector:
             logging.warning("No S3 objects provided for version detection")
             return "legacy"  # Default fallback
 
-        # Primary indicator: BILLING_PERIOD= is specific to CUR 2.0
+        # Check for both format indicators
+        has_date_pattern = any(re.search(r"\d{8}-\d{8}", obj["Key"]) for obj in s3_objects)
+        has_zip_files = any(obj["Key"].endswith(".csv.zip") for obj in s3_objects)
         has_billing_period = any("BILLING_PERIOD=" in obj["Key"] for obj in s3_objects)
+        has_metadata_folder = any("/metadata/" in obj["Key"] for obj in s3_objects)
+        has_gzip_files = any(obj["Key"].endswith(".csv.gz") for obj in s3_objects)
+
+        # Priority 1: CUR 1.0 date patterns (YYYYMMDD-YYYYMMDD) are most specific
+        # This avoids false detection when bucket contains both formats in different periods
+        if has_date_pattern or has_zip_files:
+            logging.info("Detected legacy report format (CUR 1.0) - found date patterns or ZIP files")
+            return "legacy"
+
+        # Priority 2: CUR 2.0 indicators (only if no CUR 1.0 patterns found)
         if has_billing_period:
             logging.info("Detected modern report format (CUR 2.0) - found BILLING_PERIOD= partitioning")
             return "modern"
 
-        # Secondary indicators for additional validation
-        has_metadata_folder = any("/metadata/" in obj["Key"] for obj in s3_objects)
-        has_gzip_files = any(obj["Key"].endswith(".csv.gz") for obj in s3_objects)
-
         if has_metadata_folder or has_gzip_files:
             logging.info("Detected modern report format (CUR 2.0) - found metadata folder or GZIP files")
             return "modern"
-
-        # Legacy format indicators
-        has_date_pattern = any(re.search(r"\d{8}-\d{8}", obj["Key"]) for obj in s3_objects)
-        has_zip_files = any(obj["Key"].endswith(".csv.zip") for obj in s3_objects)
-
-        if has_date_pattern or has_zip_files:
-            logging.info("Detected legacy report format (CUR 1.0) - found date patterns or ZIP files")
-            return "legacy"
 
         # Default fallback
         logging.warning("Could not determine CUR version from S3 structure, defaulting to legacy (CUR 1.0)")

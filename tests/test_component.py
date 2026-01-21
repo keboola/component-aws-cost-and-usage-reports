@@ -43,6 +43,20 @@ class TestVersionDetection(unittest.TestCase):
         version = ReportVersionDetector.detect_version([])
         self.assertEqual(version, "legacy")
 
+    def test_detect_mixed_bucket_prioritizes_cur_1_0(self):
+        """Test that CUR 1.0 is detected when bucket contains both formats."""
+        # Mixed bucket: CUR 1.0 date patterns + CUR 2.0 billing periods
+        s3_objects = [
+            {"Key": "20240101-20240131/Manifest.json"},
+            {"Key": "20240101-20240131/report.csv.zip"},
+            {"Key": "metadata/BILLING_PERIOD=2024-12/Manifest.json"},
+            {"Key": "data/BILLING_PERIOD=2024-12/report.csv.gz"},
+        ]
+
+        # Should prioritize CUR 1.0 date patterns as they're more specific
+        version = ReportVersionDetector.detect_version(s3_objects)
+        self.assertEqual(version, "legacy")
+
 
 class TestHandlerFactory(unittest.TestCase):
     """Test handler factory functionality."""
