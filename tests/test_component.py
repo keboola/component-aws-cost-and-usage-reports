@@ -13,6 +13,8 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 from aws_report_handlers import ReportHandlerFactory, ReportVersionDetector
+from aws_report_handlers.cur_1_report_handler import CUR1ReportHandler
+from component import Component
 
 
 class TestVersionDetection(unittest.TestCase):
@@ -70,6 +72,96 @@ class TestHandlerFactory(unittest.TestCase):
         # So we just test the version detection part
         version = ReportVersionDetector.detect_version(s3_objects)
         self.assertEqual(version, "modern")
+
+
+class TestColumnDeduplication(unittest.TestCase):
+    """Test case-insensitive column deduplication logic."""
+
+    def test_deduplicate_case_insensitive_no_duplicates(self):
+        """Test deduplication with no duplicates."""
+        from unittest.mock import MagicMock
+
+        # Create a mock component instance
+        component = MagicMock()
+        component._deduplicate_case_insensitive = Component._deduplicate_case_insensitive.__get__(component)
+
+        columns = ["column_a", "column_b", "column_c"]
+        result = component._deduplicate_case_insensitive(columns)
+
+        self.assertEqual(result, ["column_a", "column_b", "column_c"])
+
+    def test_deduplicate_case_insensitive_with_duplicates(self):
+        """Test deduplication with case-variant duplicates."""
+        from unittest.mock import MagicMock
+
+        component = MagicMock()
+        component._deduplicate_case_insensitive = Component._deduplicate_case_insensitive.__get__(component)
+
+        # resourcetags__user_owner appears twice with different casing
+        columns = ["column_a", "resourcetags__user_owner", "column_b", "resourcetags__user_Owner"]
+        result = component._deduplicate_case_insensitive(columns)
+
+        # Second occurrence should get _1 suffix
+        self.assertEqual(result, ["column_a", "resourcetags__user_owner", "column_b", "resourcetags__user_Owner_1"])
+
+    def test_deduplicate_case_insensitive_multiple_duplicates(self):
+        """Test deduplication with multiple case-variant duplicates."""
+        from unittest.mock import MagicMock
+
+        component = MagicMock()
+        component._deduplicate_case_insensitive = Component._deduplicate_case_insensitive.__get__(component)
+
+        columns = ["tag", "TAG", "Tag", "other"]
+        result = component._deduplicate_case_insensitive(columns)
+
+        # First stays as is, second gets _1, third gets _2
+        self.assertEqual(result, ["tag", "TAG_1", "Tag_2", "other"])
+
+
+class TestCUR1Handler(unittest.TestCase):
+    """Test CUR 1.0 handler functionality."""
+
+    def test_manifest_contains_zip_files_with_zip(self):
+        """Test ZIP file detection for .zip files."""
+        handler = CUR1ReportHandler(None, "bucket", "prefix")
+
+        manifest = {
+            "reportKeys": [
+                "path/to/report-00001.csv.zip",
+                "path/to/report-00002.csv.zip"
+            ]
+        }
+
+        self.assertTrue(handler._manifest_contains_zip_files(manifest))
+
+    def test_manifest_contains_zip_files_with_csv(self):
+        """Test ZIP file detection for direct CSV files."""
+        handler = CUR1ReportHandler(None, "bucket", "prefix")
+
+        manifest = {
+            "reportKeys": [
+                "path/to/report-00001.csv",
+                "path/to/report-00002.csv"
+            ]
+        }
+
+        self.assertFalse(handler._manifest_contains_zip_files(manifest))
+
+    def test_manifest_contains_zip_files_empty(self):
+        """Test ZIP file detection with empty reportKeys."""
+        handler = CUR1ReportHandler(None, "bucket", "prefix")
+
+        manifest = {"reportKeys": []}
+
+        self.assertFalse(handler._manifest_contains_zip_files(manifest))
+
+    def test_manifest_contains_zip_files_missing(self):
+        """Test ZIP file detection with missing reportKeys."""
+        handler = CUR1ReportHandler(None, "bucket", "prefix")
+
+        manifest = {}
+
+        self.assertFalse(handler._manifest_contains_zip_files(manifest))
 
 
 if __name__ == "__main__":
