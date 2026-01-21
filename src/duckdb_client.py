@@ -118,34 +118,31 @@ class DuckDB:
             BATCH_SIZE = 25  # Process 25 files at a time
             options = self._get_read_csv_auto_options()
 
-            # Create base table from first batch
-            first_batch = csv_patterns[:BATCH_SIZE]
-            file_list = ", ".join([f"'{pattern}'" for pattern in first_batch])
+            # Split files into batches
+            all_batches = [csv_patterns[i:i + BATCH_SIZE]
+                           for i in range(0, len(csv_patterns), BATCH_SIZE)]
 
-            logging.info(f"Creating base table from first {len(first_batch)} files...")
-            self.con.execute(f"""
-                CREATE OR REPLACE TABLE raw_unified AS
-                SELECT * EXCLUDE (filename)
-                FROM read_csv_auto([{file_list}],
-                                   {options},
-                                   union_by_name=true);
-            """)
-
-            # Process remaining files in batches
-            remaining_batches = [csv_patterns[i:i + BATCH_SIZE]
-                                 for i in range(BATCH_SIZE, len(csv_patterns), BATCH_SIZE)]
-
-            for batch_idx, batch in enumerate(remaining_batches, start=2):
+            # Build UNION ALL query for all batches
+            union_parts = []
+            for batch_idx, batch in enumerate(all_batches, start=1):
                 file_list = ", ".join([f"'{pattern}'" for pattern in batch])
-                logging.info(f"Processing batch {batch_idx}/{len(remaining_batches) + 1} ({len(batch)} files)...")
+                logging.info(f"Preparing batch {batch_idx}/{len(all_batches)} ({len(batch)} files)...")
 
-                self.con.execute(f"""
-                    INSERT INTO raw_unified
+                union_parts.append(f"""
                     SELECT * EXCLUDE (filename)
                     FROM read_csv_auto([{file_list}],
                                        {options},
-                                       union_by_name=true);
+                                       union_by_name=true)
                 """)
+
+            # Combine all batches with UNION ALL BY NAME
+            logging.info("Creating unified table from all batches...")
+            union_query = "\nUNION ALL BY NAME\n".join(union_parts)
+
+            self.con.execute(f"""
+                CREATE OR REPLACE TABLE raw_unified AS
+                {union_query};
+            """)
 
             # Build SELECT with column aliases for final view
             select_parts = []
@@ -170,7 +167,7 @@ class DuckDB:
             elapsed = time.time() - start_time
             logging.info(
                 f"Unified view created in {elapsed:.1f}s from {len(csv_patterns)} files "
-                f"({len(remaining_batches) + 1} batches) with {len(final_columns)} columns."
+                f"({len(all_batches)} batches) with {len(final_columns)} columns."
             )
 
             return True
