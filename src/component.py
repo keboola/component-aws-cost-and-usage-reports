@@ -31,19 +31,16 @@ class Component(ComponentBase):
         logging.info("Loading configuration...")
 
         # Initialize AWS client
-        s3_client = boto3.client(
+        self.s3_client = boto3.client(
             "s3",
             region_name=self.config.aws_parameters.aws_region,
             aws_access_key_id=self.config.aws_parameters.api_key_id,
             aws_secret_access_key=self.config.aws_parameters.api_key_secret,
         )
 
-        # Initialize report handler
-        self.report_handler = ReportHandlerFactory.create_handler(
-            s3_client=s3_client,
-            bucket=self.config.aws_parameters.s3_bucket,
-            report_prefix=self.config.report_path_prefix,
-        )
+        # Report handler will be initialized in run() after date range is set
+        # to enable proper version detection on date-filtered S3 objects
+        self.report_handler = None
         self.duckdb_processor = DuckDB(self.config)
         self.column_normalizer = DictHeaderNormalizer(replace_dict={"/": "__"})
 
@@ -66,6 +63,16 @@ class Component(ComponentBase):
         try:
             # Step 1: Prepare runtime state
             self._prepare_runtime_state()
+
+            # Step 1b: Initialize report handler with date-filtered version detection
+            # This ensures we detect CUR version only on relevant date range,
+            # avoiding false detection in buckets with mixed CUR 1.0 and 2.0 data
+            self.report_handler = ReportHandlerFactory.create_handler(
+                s3_client=self.s3_client,
+                bucket=self.config.aws_parameters.s3_bucket,
+                report_prefix=self.config.report_path_prefix,
+                since_dt=self.since_dt,
+            )
 
             # Step 2: Discover and validate available reports
             report_manifests = self._discover_available_reports()
@@ -104,7 +111,7 @@ class Component(ComponentBase):
             self.since_dt = pytz.utc.localize(start_date)
 
         # Extract report name from prefix
-        self.report_name = self.report_handler.get_report_name()
+        self.report_name = self.config.report_path_prefix.rstrip("/").rstrip("*").split("/")[-1]
 
     def _discover_available_reports(self):
         """Discover and filter available reports from S3 based on

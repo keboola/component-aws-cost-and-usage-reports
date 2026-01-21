@@ -21,6 +21,7 @@ class ReportHandlerFactory:
         bucket: str,
         report_prefix: str,
         s3_objects: list[dict] | None = None,
+        since_dt=None,
     ) -> BaseReportHandler:
         """
         Create handler based on detected report format.
@@ -30,6 +31,7 @@ class ReportHandlerFactory:
             bucket: S3 bucket name
             report_prefix: Report prefix/path
             s3_objects: Optional S3 objects for format detection (will fetch if not provided)
+            since_dt: Optional datetime filter for S3 objects (used for version detection)
 
         Returns:
             Appropriate handler instance (CUR1ReportHandler or CUR2ReportHandler)
@@ -37,7 +39,8 @@ class ReportHandlerFactory:
         # If no S3 objects provided, create a temporary handler to fetch them
         if s3_objects is None:
             temp_handler = CUR1ReportHandler(s3_client, bucket, report_prefix)
-            s3_objects = list(temp_handler.get_s3_objects())
+            # Apply date filter to avoid incorrect version detection on mixed buckets
+            s3_objects = list(temp_handler.get_s3_objects(since_dt=since_dt))
 
         version_type = ReportVersionDetector.detect_version(s3_objects)
 
