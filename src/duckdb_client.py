@@ -54,6 +54,7 @@ class DuckDB:
         self.con.execute("SET temp_directory='/tmp/duckdb_temp';")
         self.con.execute("SET preserve_insertion_order=false;")
         self.con.execute("SET threads=1;")
+        self.con.execute("SET memory_limit='1536MB';")  # 1.5GB limit (Docker has 2GB total)
 
     def close(self):
         """
