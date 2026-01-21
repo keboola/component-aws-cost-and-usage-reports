@@ -133,7 +133,7 @@ class DuckDB:
 
             # Process remaining files in batches
             remaining_batches = [csv_patterns[i:i + BATCH_SIZE]
-                               for i in range(BATCH_SIZE, len(csv_patterns), BATCH_SIZE)]
+                                 for i in range(BATCH_SIZE, len(csv_patterns), BATCH_SIZE)]
 
             for batch_idx, batch in enumerate(remaining_batches, start=2):
                 file_list = ", ".join([f"'{pattern}'" for pattern in batch])
