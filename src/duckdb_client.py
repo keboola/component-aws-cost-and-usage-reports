@@ -98,11 +98,9 @@ class DuckDB:
 
     def create_unified_view_from_files(self, csv_patterns: list[str], final_columns: list[str]) -> bool:
         """
-        Create unified view directly from CSV files using read_csv_auto with union_by_name.
+        Create unified view from CSV files using batch processing to avoid OOM.
 
-        This approach avoids creating per-file views and building massive UNION ALL queries.
-        Instead, it uses DuckDB's union_by_name feature to read all files at once and
-        automatically handle schema evolution.
+        Processes files in batches to limit memory usage, then creates final view.
 
         Args:
             csv_patterns: List of CSV file paths (S3 URIs or local paths)
@@ -112,23 +110,44 @@ class DuckDB:
             True if successful, False otherwise
         """
         import time
-        logging.info(f"Creating unified view from {len(csv_patterns)} CSV files using read_csv_auto...")
+        logging.info(f"Creating unified view from {len(csv_patterns)} CSV files using batched read_csv_auto...")
         start_time = time.time()
 
         try:
-            file_list = ", ".join([f"'{pattern}'" for pattern in csv_patterns])
-
+            # Process files in batches to avoid OOM with large file counts
+            BATCH_SIZE = 25  # Process 25 files at a time
             options = self._get_read_csv_auto_options()
 
+            # Create base table from first batch
+            first_batch = csv_patterns[:BATCH_SIZE]
+            file_list = ", ".join([f"'{pattern}'" for pattern in first_batch])
+
+            logging.info(f"Creating base table from first {len(first_batch)} files...")
             self.con.execute(f"""
-                CREATE OR REPLACE VIEW raw_unified AS
+                CREATE OR REPLACE TABLE raw_unified AS
                 SELECT * EXCLUDE (filename)
                 FROM read_csv_auto([{file_list}],
                                    {options},
                                    union_by_name=true);
             """)
 
-            # Build SELECT with column aliases
+            # Process remaining files in batches
+            remaining_batches = [csv_patterns[i:i + BATCH_SIZE]
+                               for i in range(BATCH_SIZE, len(csv_patterns), BATCH_SIZE)]
+
+            for batch_idx, batch in enumerate(remaining_batches, start=2):
+                file_list = ", ".join([f"'{pattern}'" for pattern in batch])
+                logging.info(f"Processing batch {batch_idx}/{len(remaining_batches) + 1} ({len(batch)} files)...")
+
+                self.con.execute(f"""
+                    INSERT INTO raw_unified
+                    SELECT * EXCLUDE (filename)
+                    FROM read_csv_auto([{file_list}],
+                                       {options},
+                                       union_by_name=true);
+                """)
+
+            # Build SELECT with column aliases for final view
             select_parts = []
             for final_col in final_columns:
                 # Convert from KBC format (col__name) to original (col/name)
@@ -151,7 +170,7 @@ class DuckDB:
             elapsed = time.time() - start_time
             logging.info(
                 f"Unified view created in {elapsed:.1f}s from {len(csv_patterns)} files "
-                f"with {len(final_columns)} columns."
+                f"({len(remaining_batches) + 1} batches) with {len(final_columns)} columns."
             )
 
             return True
