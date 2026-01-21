@@ -79,11 +79,20 @@ class CUR1ReportHandler(BaseReportHandler):
         csv_manifests = [m for m in manifests if not self._manifest_contains_zip_files(m)]
         zip_manifests = [m for m in manifests if self._manifest_contains_zip_files(m)]
 
-        # Process direct CSV patterns
+        # Process direct CSV patterns - use reportKeys if available, otherwise use wildcard
         for manifest in csv_manifests:
-            base_path = manifest["report_folder"]
-            pattern = f"s3://{self.bucket}/{base_path}/*.csv"
-            patterns.append(pattern)
+            report_keys = manifest.get("reportKeys", [])
+            if report_keys:
+                # Use exact paths from manifest
+                for key in report_keys:
+                    if key.endswith(".csv") or key.endswith(".csv.gz"):
+                        patterns.append(f"s3://{self.bucket}/{key}")
+            else:
+                # Fallback to wildcard pattern if no reportKeys
+                base_path = manifest["report_folder"]
+                pattern = f"s3://{self.bucket}/{base_path}/*.csv"
+                patterns.append(pattern)
+                logging.warning(f"Manifest for {base_path} has no reportKeys, using wildcard pattern")
 
         # Process ZIP files in parallel
         if zip_manifests:
@@ -196,9 +205,11 @@ class CUR1ReportHandler(BaseReportHandler):
 
     def _manifest_contains_zip_files(self, manifest: dict[str, Any]) -> bool:
         """Check if CUR 1.0 manifest contains ZIP files."""
-        return (
-            manifest.get("reportKeys") and len(manifest["reportKeys"]) > 0 and manifest["reportKeys"][0].endswith("zip")
-        )
+        report_keys = manifest.get("reportKeys", [])
+        if not report_keys:
+            return False
+        # Check if any reportKey ends with .zip or .csv.zip
+        return any(key.endswith(".zip") or key.endswith(".csv.zip") for key in report_keys)
 
     def _extract_all_zip_files_parallel(self, zip_manifests: list[dict]) -> list[str]:
         """Extract all ZIP files in parallel and return paths to extracted CSV files."""
@@ -207,7 +218,7 @@ class CUR1ReportHandler(BaseReportHandler):
         zip_tasks = []
         for manifest in zip_manifests:
             for chunk_key in manifest.get("reportKeys", []):
-                if chunk_key.endswith(".zip"):
+                if chunk_key.endswith(".zip") or chunk_key.endswith(".csv.zip"):
                     # Handle special path syntax for S3 keys
                     key_parts = chunk_key.split("/")
                     if "//" in manifest["report_folder"]:
