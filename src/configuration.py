@@ -45,7 +45,7 @@ class Configuration(BaseModel):
     @property
     def end_datetime(self) -> datetime:
         """Get end date as datetime object."""
-        if self.max_date == "now":
+        if self.max_date == "now" or self.max_date == "" or self.max_date is None:
             return datetime.now()
         return datetime.strptime(self.max_date, "%Y-%m-%d")
 
@@ -59,8 +59,8 @@ class Configuration(BaseModel):
             except ValueError:
                 raise ValueError("min_date_since must be in YYYY-MM-DD format")
 
-        # Validate max_date
-        if self.max_date != "now":
+        # Validate max_date (empty string or None defaults to "now")
+        if self.max_date != "now" and self.max_date != "" and self.max_date is not None:
             try:
                 datetime.strptime(self.max_date, "%Y-%m-%d")
             except ValueError:
