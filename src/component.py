@@ -171,7 +171,7 @@ class Component(KBCEnvHandler):
                     since_timestamp = man['last_modified']
                     latest_report_id = man['assemblyId']
 
-                self._upload_report_chunks_to_workspace(man, report_name)
+                self._upload_report_chunks_to_workspace(man, report_name, max_header)
 
             self._write_table_manifest(output_table)
             self.write_state_file({"last_file_timestamp": since_timestamp.isoformat(),
@@ -234,11 +234,13 @@ class Component(KBCEnvHandler):
         files = os.listdir(temp_dir)
         return os.path.join(temp_dir, files[0])
 
-    def _upload_report_chunks_to_workspace(self, manifest, table_name):
+    def _upload_report_chunks_to_workspace(self, manifest, table_name, max_header):
         logging.info(
             f"Uploading report ID {manifest['assemblyId']} for period {manifest['period']}"
             f" in {len(manifest['reportKeys'])} report chunks.")
-        columns = self._get_manifest_normalized_columns(manifest)
+        # Use max_header (deduplicated across all manifests) instead of per-manifest columns
+        # This fixes duplicate column errors when different manifests have case-variant columns
+        columns = max_header
         is_zip = True if manifest['reportKeys'] and manifest['reportKeys'][0].endswith('zip') else False
         if is_zip:
             logging.info("Processing zip file via local stage")
