@@ -156,7 +156,7 @@ class DuckDB:
                 batch_columns = [row[0] for row in result]
                 all_columns.update(batch_columns)
                 logging.info(f"Scanned {i + len(batch)}/{len(csv_patterns)} files, "
-                           f"found {len(all_columns)} unique columns so far")
+                             f"found {len(all_columns)} unique columns so far")
 
             original_columns = sorted(all_columns)
             logging.info(f"Column discovery complete: {len(original_columns)} total columns")
