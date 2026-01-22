@@ -96,12 +96,30 @@ class DuckDB:
                                            filename=true,
                                            PARALLEL=FALSE"""
 
+    def _normalize_column_name(self, col_name: str) -> str:
+        """
+        Normalize column name exactly like v1.1.2 did.
+
+        Replaces:
+        - / with __
+        - All other non-alphanumeric characters with _
+
+        Example: "resourceTags/user:owner" -> "resourceTags__user_owner"
+        """
+        import re
+        normalized = col_name.replace('/', '__')
+        normalized = re.sub(r"[^a-zA-Z\d_]", "_", normalized)
+        return normalized
+
     def create_unified_table_from_files(self, csv_patterns: list[str]) -> bool:
         """
-        Create unified table from CSV files using UNION ALL with small batches.
+        Create unified table with normalized and deduplicated column names (like v1.1.2).
 
-        Uses UNION ALL BY NAME to combine small batches of files. Column normalization
-        is handled by Keboola Storage during upload, so we keep original column names.
+        Process:
+        1. UNION ALL files with original column names
+        2. Normalize column names (/ -> __, special chars -> _)
+        3. Deduplicate case-insensitive with _1, _2 suffixes
+        4. Export with normalized names
 
         Args:
             csv_patterns: List of CSV file paths (S3 URIs or local paths)
@@ -114,15 +132,14 @@ class DuckDB:
         start_time = time.time()
 
         try:
-            # Process files in small batches to minimize memory usage
-            BATCH_SIZE = 10  # Increased to 10 files per batch with 4GB memory
+            # Process files in batches
+            BATCH_SIZE = 10  # 10 files per batch with 4GB memory
             options = self._get_read_csv_auto_options()
 
-            # Split files into small batches
             all_batches = [csv_patterns[i:i + BATCH_SIZE]
                            for i in range(0, len(csv_patterns), BATCH_SIZE)]
 
-            # Build UNION ALL query for all batches
+            # Build UNION ALL query
             logging.info(f"Building UNION ALL query for {len(all_batches)} batches...")
             union_parts = []
             for batch_idx, batch in enumerate(all_batches, start=1):
@@ -136,28 +153,75 @@ class DuckDB:
                                        union_by_name=true)
                 """)
 
-            # Combine all batches with UNION ALL BY NAME
-            logging.info("Creating unified table from all batches...")
+            logging.info("Creating raw unified table...")
             union_query = "\nUNION ALL BY NAME\n".join(union_parts)
 
             self.con.execute(f"""
-                CREATE OR REPLACE TABLE {UNIFIED_REPORTS_VIEW} AS
+                CREATE OR REPLACE TABLE raw_unified AS
                 {union_query};
             """)
 
+            # Get columns and normalize like v1.1.2
+            columns_result = self.con.execute("DESCRIBE raw_unified").fetchall()
+            original_columns = [row[0] for row in columns_result]
+
+            logging.info(f"Raw table created with {len(original_columns)} columns, normalizing...")
+
+            # Normalize column names (like v1.1.2 _kbc_normalize_header)
+            normalized_columns = [self._normalize_column_name(col) for col in original_columns]
+
+            # Deduplicate case-insensitive (like v1.1.2 _dedupe_header)
+            new_header = []
+            new_header_lower = []
+            dup_cols = {}
+            column_mappings = []  # (original, final_normalized)
+
+            for orig_col, norm_col in zip(original_columns, normalized_columns):
+                norm_lower = norm_col.lower()
+                if norm_lower in new_header_lower:
+                    # Duplicate - add suffix
+                    new_index = dup_cols.get(norm_lower, 0) + 1
+                    final_col = f"{norm_col}_{new_index}"
+                    dup_cols[norm_lower] = new_index
+                    logging.info(f"Duplicate column: '{orig_col}' -> '{final_col}'")
+                else:
+                    final_col = norm_col
+                    new_header_lower.append(norm_lower)
+
+                new_header.append(final_col)
+                column_mappings.append((orig_col, final_col))
+
+            # Build SELECT with normalized and deduplicated names
+            select_parts = []
+            for orig_col, final_col in column_mappings:
+                quoted_orig = self._quote_ident(orig_col)
+                quoted_final = self._quote_ident(final_col)
+                select_parts.append(f"{quoted_orig} AS {quoted_final}")
+
+            select_sql = ",\n                ".join(select_parts)
+
+            logging.info("Creating final table with normalized column names...")
+            self.con.execute(f"""
+                CREATE OR REPLACE TABLE {UNIFIED_REPORTS_VIEW} AS
+                SELECT {select_sql}
+                FROM raw_unified;
+            """)
+
+            # Drop temp table
+            self.con.execute("DROP TABLE raw_unified")
+
             elapsed = time.time() - start_time
             row_count = self.con.execute(f"SELECT COUNT(*) FROM {UNIFIED_REPORTS_VIEW}").fetchone()[0]
-            col_count = len(self.con.execute(f"DESCRIBE {UNIFIED_REPORTS_VIEW}").fetchall())
 
             logging.info(
-                f"Unified table created in {elapsed:.1f}s: {row_count:,} rows, "
-                f"{col_count} columns from {len(csv_patterns)} files ({len(all_batches)} batches)"
+                f"Table created in {elapsed:.1f}s: {row_count:,} rows, "
+                f"{len(new_header)} columns from {len(csv_patterns)} files"
             )
 
             return True
 
         except Exception as e:
-            logging.error(f"Failed to create unified table from files: {e}")
+            logging.error(f"Failed to create unified table: {e}")
             return False
 
     def export_data_to_csv(self, output_path: str):
