@@ -113,13 +113,13 @@ class DuckDB:
 
     def create_unified_table_from_files(self, csv_patterns: list[str]) -> bool:
         """
-        Create unified table with normalized and deduplicated column names (like v1.1.2).
+        Create unified VIEW with normalized columns using lazy evaluation (no data in memory).
 
         Process:
-        1. UNION ALL files with original column names
-        2. Normalize column names (/ -> __, special chars -> _)
-        3. Deduplicate case-insensitive with _1, _2 suffixes
-        4. Export with normalized names
+        1. Scan files to discover all columns (sample_size=1, minimal memory)
+        2. Normalize and deduplicate column names (like v1.1.2)
+        3. Create VIEW with column mapping (just SQL definition, no data)
+        4. COPY will stream directly: S3 -> normalize -> CSV
 
         Args:
             csv_patterns: List of CSV file paths (S3 URIs or local paths)
@@ -128,49 +128,43 @@ class DuckDB:
             True if successful, False otherwise
         """
         import time
-        logging.info(f"Creating unified table from {len(csv_patterns)} CSV files...")
+        logging.info(f"Creating unified VIEW from {len(csv_patterns)} CSV files (lazy evaluation)...")
         start_time = time.time()
 
         try:
-            # Process files in batches
-            BATCH_SIZE = 10  # 10 files per batch with 4GB memory
             options = self._get_read_csv_auto_options()
 
-            all_batches = [csv_patterns[i:i + BATCH_SIZE]
-                           for i in range(0, len(csv_patterns), BATCH_SIZE)]
+            # Step 1: Discover all columns by scanning files with minimal memory
+            logging.info("Discovering columns from all files (sample_size=1)...")
+            all_columns = set()
 
-            # Build UNION ALL query
-            logging.info(f"Building UNION ALL query for {len(all_batches)} batches...")
-            union_parts = []
-            for batch_idx, batch in enumerate(all_batches, start=1):
+            # Scan in small batches to avoid opening too many files at once
+            SCAN_BATCH = 20
+            for i in range(0, len(csv_patterns), SCAN_BATCH):
+                batch = csv_patterns[i:i + SCAN_BATCH]
                 file_list = ", ".join([f"'{pattern}'" for pattern in batch])
-                logging.info(f"Adding batch {batch_idx}/{len(all_batches)} ({len(batch)} files)...")
 
-                union_parts.append(f"""
+                result = self.con.execute(f"""
+                    DESCRIBE
                     SELECT * EXCLUDE (filename)
                     FROM read_csv_auto([{file_list}],
                                        {options},
-                                       union_by_name=true)
-                """)
+                                       union_by_name=true,
+                                       sample_size=1);
+                """).fetchall()
 
-            logging.info("Creating raw unified table...")
-            union_query = "\nUNION ALL BY NAME\n".join(union_parts)
+                batch_columns = [row[0] for row in result]
+                all_columns.update(batch_columns)
+                logging.info(f"Scanned {i + len(batch)}/{len(csv_patterns)} files, "
+                           f"found {len(all_columns)} unique columns so far")
 
-            self.con.execute(f"""
-                CREATE OR REPLACE TABLE raw_unified AS
-                {union_query};
-            """)
+            original_columns = sorted(all_columns)
+            logging.info(f"Column discovery complete: {len(original_columns)} total columns")
 
-            # Get columns and normalize like v1.1.2
-            columns_result = self.con.execute("DESCRIBE raw_unified").fetchall()
-            original_columns = [row[0] for row in columns_result]
-
-            logging.info(f"Raw table created with {len(original_columns)} columns, normalizing...")
-
-            # Normalize column names (like v1.1.2 _kbc_normalize_header)
+            # Step 2: Normalize column names (like v1.1.2 _kbc_normalize_header)
             normalized_columns = [self._normalize_column_name(col) for col in original_columns]
 
-            # Deduplicate case-insensitive (like v1.1.2 _dedupe_header)
+            # Step 3: Deduplicate case-insensitive (like v1.1.2 _dedupe_header)
             new_header = []
             new_header_lower = []
             dup_cols = {}
@@ -191,7 +185,7 @@ class DuckDB:
                 new_header.append(final_col)
                 column_mappings.append((orig_col, final_col))
 
-            # Build SELECT with normalized and deduplicated names
+            # Step 4: Build SELECT with normalized and deduplicated names
             select_parts = []
             for orig_col, final_col in column_mappings:
                 quoted_orig = self._quote_ident(orig_col)
@@ -200,28 +194,28 @@ class DuckDB:
 
             select_sql = ",\n                ".join(select_parts)
 
-            logging.info("Creating final table with normalized column names...")
+            # Step 5: Create VIEW with all files at once (lazy - no data loaded)
+            logging.info(f"Creating VIEW with {len(csv_patterns)} files (no data in memory)...")
+            all_files = ", ".join([f"'{pattern}'" for pattern in csv_patterns])
+
             self.con.execute(f"""
-                CREATE OR REPLACE TABLE {UNIFIED_REPORTS_VIEW} AS
+                CREATE OR REPLACE VIEW {UNIFIED_REPORTS_VIEW} AS
                 SELECT {select_sql}
-                FROM raw_unified;
+                FROM read_csv_auto([{all_files}],
+                                   {options},
+                                   union_by_name=true);
             """)
 
-            # Drop temp table
-            self.con.execute("DROP TABLE raw_unified")
-
             elapsed = time.time() - start_time
-            row_count = self.con.execute(f"SELECT COUNT(*) FROM {UNIFIED_REPORTS_VIEW}").fetchone()[0]
-
             logging.info(
-                f"Table created in {elapsed:.1f}s: {row_count:,} rows, "
-                f"{len(new_header)} columns from {len(csv_patterns)} files"
+                f"VIEW created in {elapsed:.1f}s with {len(new_header)} columns. "
+                f"Data will stream during COPY (lazy evaluation)."
             )
 
             return True
 
         except Exception as e:
-            logging.error(f"Failed to create unified table: {e}")
+            logging.error(f"Failed to create unified VIEW: {e}")
             return False
 
     def export_data_to_csv(self, output_path: str):
