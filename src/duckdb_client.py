@@ -98,10 +98,10 @@ class DuckDB:
 
     def create_unified_view_from_files(self, csv_patterns: list[str], final_columns: list[str]) -> bool:
         """
-        Create unified view from CSV files using incremental processing to avoid OOM.
+        Create unified view from CSV files using UNION ALL with small batches.
 
-        First scans all files to discover all columns, creates empty table with all columns,
-        then inserts data in small batches to minimize memory usage.
+        Uses UNION ALL BY NAME to combine small batches of files. DuckDB automatically
+        handles column deduplication when union_by_name=true is used.
 
         Args:
             csv_patterns: List of CSV file paths (S3 URIs or local paths)
@@ -111,7 +111,7 @@ class DuckDB:
             True if successful, False otherwise
         """
         import time
-        logging.info(f"Creating unified view from {len(csv_patterns)} CSV files using incremental processing...")
+        logging.info(f"Creating unified view from {len(csv_patterns)} CSV files using small-batch UNION ALL...")
         start_time = time.time()
 
         try:
@@ -123,51 +123,28 @@ class DuckDB:
             all_batches = [csv_patterns[i:i + BATCH_SIZE]
                            for i in range(0, len(csv_patterns), BATCH_SIZE)]
 
-            # Step 1: Discover all unique columns across all files
-            logging.info("Discovering all columns from all files...")
-            all_columns = set()
-
+            # Build UNION ALL query for all batches with small batch sizes
+            logging.info(f"Building UNION ALL query for {len(all_batches)} batches...")
+            union_parts = []
             for batch_idx, batch in enumerate(all_batches, start=1):
                 file_list = ", ".join([f"'{pattern}'" for pattern in batch])
-                logging.info(f"Scanning batch {batch_idx}/{len(all_batches)} for columns...")
+                logging.info(f"Adding batch {batch_idx}/{len(all_batches)} ({len(batch)} files) to query...")
 
-                # Get columns from this batch using DESCRIBE
-                result = self.con.execute(f"""
-                    DESCRIBE
+                union_parts.append(f"""
                     SELECT * EXCLUDE (filename)
                     FROM read_csv_auto([{file_list}],
                                        {options},
-                                       union_by_name=true,
-                                       sample_size=1);
-                """).fetchall()
-
-                batch_columns = [row[0] for row in result]
-                all_columns.update(batch_columns)
-                logging.info(f"Batch {batch_idx}: found {len(batch_columns)} columns, "
-                             f"total unique: {len(all_columns)}")
-
-            # Step 2: Create empty table with all discovered columns
-            logging.info(f"Creating empty table with {len(all_columns)} columns...")
-            column_defs = [f"{self._quote_ident(col)} VARCHAR" for col in sorted(all_columns)]
-            create_sql = f"""
-                CREATE OR REPLACE TABLE raw_unified (
-                    {', '.join(column_defs)}
-                );
-            """
-            self.con.execute(create_sql)
-
-            # Step 3: Insert data from each batch
-            for batch_idx, batch in enumerate(all_batches, start=1):
-                file_list = ", ".join([f"'{pattern}'" for pattern in batch])
-                logging.info(f"Loading batch {batch_idx}/{len(all_batches)} ({len(batch)} files)...")
-
-                self.con.execute(f"""
-                    INSERT INTO raw_unified BY NAME
-                    SELECT * EXCLUDE (filename)
-                    FROM read_csv_auto([{file_list}],
-                                       {options},
-                                       union_by_name=true);
+                                       union_by_name=true)
                 """)
+
+            # Combine all batches with UNION ALL BY NAME
+            logging.info("Creating unified table from all batches...")
+            union_query = "\nUNION ALL BY NAME\n".join(union_parts)
+
+            self.con.execute(f"""
+                CREATE OR REPLACE TABLE raw_unified AS
+                {union_query};
+            """)
 
             # Build SELECT with column aliases for final view
             select_parts = []
