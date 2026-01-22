@@ -138,7 +138,7 @@ class Component(ComponentBase):
         return report_manifests
 
     def _process_reports_unified_bulk(self, report_manifests):
-        """Process reports using read_csv_auto with union_by_name for efficient processing."""
+        """Process reports using DuckDB UNION ALL for efficient processing."""
         logging.info(f"Processing {len(report_manifests)} reports...")
 
         all_csv_patterns = self.report_handler.get_csv_patterns(report_manifests)
@@ -148,18 +148,21 @@ class Component(ComponentBase):
 
         self._update_runtime_state_from_manifests(report_manifests)
 
-        final_columns = self._get_max_header_normalized(report_manifests, self.last_header)
-        self.last_header = final_columns
-
         self.duckdb_processor.setup_connection()
 
-        if not self.duckdb_processor.create_unified_view_from_files(all_csv_patterns, final_columns):
-            raise Exception("Failed to create unified view from files")
+        # Create unified table with original column names from CSV files
+        if not self.duckdb_processor.create_unified_table_from_files(all_csv_patterns):
+            raise Exception("Failed to create unified table from files")
 
+        # Export to CSV - Keboola Storage will normalize column names during upload
         self.export_output_path = os.path.join(self.tables_out_path, f"{self.report_name}.csv")
         self.duckdb_processor.export_data_to_csv(self.export_output_path)
 
         self.duckdb_processor.close()
+
+        # Get final columns from the exported CSV for state tracking
+        final_columns = self._get_max_header_normalized(report_manifests, self.last_header)
+        self.last_header = final_columns
 
         logging.info(f"Successfully processed {len(all_csv_patterns)} files")
 

@@ -96,39 +96,38 @@ class DuckDB:
                                            filename=true,
                                            PARALLEL=FALSE"""
 
-    def create_unified_view_from_files(self, csv_patterns: list[str], final_columns: list[str]) -> bool:
+    def create_unified_table_from_files(self, csv_patterns: list[str]) -> bool:
         """
-        Create unified view from CSV files using UNION ALL with small batches.
+        Create unified table from CSV files using UNION ALL with small batches.
 
-        Uses UNION ALL BY NAME to combine small batches of files. DuckDB automatically
-        handles column deduplication when union_by_name=true is used.
+        Uses UNION ALL BY NAME to combine small batches of files. Column normalization
+        is handled by Keboola Storage during upload, so we keep original column names.
 
         Args:
             csv_patterns: List of CSV file paths (S3 URIs or local paths)
-            final_columns: List of final column names in KBC format (with __)
 
         Returns:
             True if successful, False otherwise
         """
         import time
-        logging.info(f"Creating unified view from {len(csv_patterns)} CSV files using small-batch UNION ALL...")
+        logging.info(f"Creating unified table from {len(csv_patterns)} CSV files...")
         start_time = time.time()
 
         try:
-            # Process files in very small batches to minimize memory usage
-            BATCH_SIZE = 5  # Process only 5 files at a time to stay under 2GB memory limit
+            # Process files in small batches to minimize memory usage
+            BATCH_SIZE = 10  # Increased to 10 files per batch with 4GB memory
             options = self._get_read_csv_auto_options()
 
             # Split files into small batches
             all_batches = [csv_patterns[i:i + BATCH_SIZE]
                            for i in range(0, len(csv_patterns), BATCH_SIZE)]
 
-            # Build UNION ALL query for all batches with small batch sizes
+            # Build UNION ALL query for all batches
             logging.info(f"Building UNION ALL query for {len(all_batches)} batches...")
             union_parts = []
             for batch_idx, batch in enumerate(all_batches, start=1):
                 file_list = ", ".join([f"'{pattern}'" for pattern in batch])
-                logging.info(f"Adding batch {batch_idx}/{len(all_batches)} ({len(batch)} files) to query...")
+                logging.info(f"Adding batch {batch_idx}/{len(all_batches)} ({len(batch)} files)...")
 
                 union_parts.append(f"""
                     SELECT * EXCLUDE (filename)
@@ -142,40 +141,23 @@ class DuckDB:
             union_query = "\nUNION ALL BY NAME\n".join(union_parts)
 
             self.con.execute(f"""
-                CREATE OR REPLACE TABLE raw_unified AS
+                CREATE OR REPLACE TABLE {UNIFIED_REPORTS_VIEW} AS
                 {union_query};
             """)
 
-            # Build SELECT with column aliases for final view
-            select_parts = []
-            for final_col in final_columns:
-                # Convert from KBC format (col__name) to original (col/name)
-                original_col = final_col.replace("__", "/")
-                quoted_original = self._quote_ident(original_col)
-                quoted_final = self._quote_ident(final_col)
-
-                select_parts.append(
-                    f'COALESCE({quoted_original}, NULL) AS {quoted_final}'
-                )
-
-            select_sql = ",\n                ".join(select_parts)
-
-            self.con.execute(f"""
-                CREATE OR REPLACE VIEW {UNIFIED_REPORTS_VIEW} AS
-                SELECT {select_sql}
-                FROM raw_unified;
-            """)
-
             elapsed = time.time() - start_time
+            row_count = self.con.execute(f"SELECT COUNT(*) FROM {UNIFIED_REPORTS_VIEW}").fetchone()[0]
+            col_count = len(self.con.execute(f"DESCRIBE {UNIFIED_REPORTS_VIEW}").fetchall())
+
             logging.info(
-                f"Unified view created in {elapsed:.1f}s from {len(csv_patterns)} files "
-                f"({len(all_batches)} batches) with {len(final_columns)} columns."
+                f"Unified table created in {elapsed:.1f}s: {row_count:,} rows, "
+                f"{col_count} columns from {len(csv_patterns)} files ({len(all_batches)} batches)"
             )
 
             return True
 
         except Exception as e:
-            logging.error(f"Failed to create unified view from files: {e}")
+            logging.error(f"Failed to create unified table from files: {e}")
             return False
 
     def export_data_to_csv(self, output_path: str):
