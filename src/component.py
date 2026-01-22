@@ -339,19 +339,24 @@ class Component(KBCEnvHandler):
             self.report_prefix = self.report_prefix + '*'
 
     def _get_max_header_normalized(self, manifests):
-        # Collect all normalized columns from all manifests
-        all_cols = []
+        # Collect all unique raw columns from all manifests (before normalization)
+        all_raw_cols = []
+        seen_raw = set()
         for m in manifests:
-            man_cols = [col['category'] + '/' + col['name']
-                        for col in m['columns']]
-            man_cols = self._kbc_normalize_header(man_cols)
-            all_cols.extend(man_cols)
+            for col in m['columns']:
+                raw_col = col['category'] + '/' + col['name']
+                if raw_col not in seen_raw:
+                    all_raw_cols.append(raw_col)
+                    seen_raw.add(raw_col)
 
-        # Merge with previous state
-        all_cols.extend(self.last_header)
+        # Normalize all unique raw columns
+        normalized = self._kbc_normalize_header(all_raw_cols)
 
-        # Deduplicate the complete merged list (handles case variants across manifests)
-        self.last_header = self._dedupe_header(all_cols)
+        # Merge with previous state (already normalized and deduplicated)
+        normalized.extend(self.last_header)
+
+        # Deduplicate case-insensitive (handles case variants like "owner" vs "Owner")
+        self.last_header = self._dedupe_header(normalized)
         self.last_header.sort()
 
         return self.last_header
