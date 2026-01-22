@@ -144,7 +144,7 @@ class DuckDB:
                 batch_columns = [row[0] for row in result]
                 all_columns.update(batch_columns)
                 logging.info(f"Batch {batch_idx}: found {len(batch_columns)} columns, "
-                           f"total unique: {len(all_columns)}")
+                             f"total unique: {len(all_columns)}")
 
             # Step 2: Create empty table with all discovered columns
             logging.info(f"Creating empty table with {len(all_columns)} columns...")
