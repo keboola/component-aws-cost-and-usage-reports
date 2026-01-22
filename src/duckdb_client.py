@@ -100,8 +100,8 @@ class DuckDB:
         """
         Create unified view from CSV files using incremental processing to avoid OOM.
 
-        Processes files one-by-one or in very small batches, inserting into a persistent table
-        to minimize memory usage. This approach is slower but works with limited memory.
+        First scans all files to discover all columns, creates empty table with all columns,
+        then inserts data in small batches to minimize memory usage.
 
         Args:
             csv_patterns: List of CSV file paths (S3 URIs or local paths)
@@ -123,25 +123,44 @@ class DuckDB:
             all_batches = [csv_patterns[i:i + BATCH_SIZE]
                            for i in range(0, len(csv_patterns), BATCH_SIZE)]
 
-            # Process first batch to create the table
-            first_batch = all_batches[0]
-            file_list = ", ".join([f"'{pattern}'" for pattern in first_batch])
-            logging.info(f"Creating base table from first {len(first_batch)} files...")
+            # Step 1: Discover all unique columns across all files
+            logging.info("Discovering all columns from all files...")
+            all_columns = set()
 
-            self.con.execute(f"""
-                CREATE OR REPLACE TABLE raw_unified AS
-                SELECT * EXCLUDE (filename)
-                FROM read_csv_auto([{file_list}],
-                                   {options},
-                                   union_by_name=true);
-            """)
-
-            # Process remaining batches one at a time, inserting with union_by_name
-            for batch_idx, batch in enumerate(all_batches[1:], start=2):
+            for batch_idx, batch in enumerate(all_batches, start=1):
                 file_list = ", ".join([f"'{pattern}'" for pattern in batch])
-                logging.info(f"Processing batch {batch_idx}/{len(all_batches)} ({len(batch)} files)...")
+                logging.info(f"Scanning batch {batch_idx}/{len(all_batches)} for columns...")
 
-                # Use INSERT BY NAME to handle different column sets
+                # Get columns from this batch using DESCRIBE
+                result = self.con.execute(f"""
+                    DESCRIBE
+                    SELECT * EXCLUDE (filename)
+                    FROM read_csv_auto([{file_list}],
+                                       {options},
+                                       union_by_name=true,
+                                       sample_size=1);
+                """).fetchall()
+
+                batch_columns = [row[0] for row in result]
+                all_columns.update(batch_columns)
+                logging.info(f"Batch {batch_idx}: found {len(batch_columns)} columns, "
+                           f"total unique: {len(all_columns)}")
+
+            # Step 2: Create empty table with all discovered columns
+            logging.info(f"Creating empty table with {len(all_columns)} columns...")
+            column_defs = [f"{self._quote_ident(col)} VARCHAR" for col in sorted(all_columns)]
+            create_sql = f"""
+                CREATE OR REPLACE TABLE raw_unified (
+                    {', '.join(column_defs)}
+                );
+            """
+            self.con.execute(create_sql)
+
+            # Step 3: Insert data from each batch
+            for batch_idx, batch in enumerate(all_batches, start=1):
+                file_list = ", ".join([f"'{pattern}'" for pattern in batch])
+                logging.info(f"Loading batch {batch_idx}/{len(all_batches)} ({len(batch)} files)...")
+
                 self.con.execute(f"""
                     INSERT INTO raw_unified BY NAME
                     SELECT * EXCLUDE (filename)
