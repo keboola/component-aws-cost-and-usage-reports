@@ -98,9 +98,10 @@ class DuckDB:
 
     def create_unified_view_from_files(self, csv_patterns: list[str], final_columns: list[str]) -> bool:
         """
-        Create unified view from CSV files using batch processing to avoid OOM.
+        Create unified view from CSV files using incremental processing to avoid OOM.
 
-        Processes files in batches to limit memory usage, then creates final view.
+        Processes files one-by-one or in very small batches, inserting into a persistent table
+        to minimize memory usage. This approach is slower but works with limited memory.
 
         Args:
             csv_patterns: List of CSV file paths (S3 URIs or local paths)
@@ -110,39 +111,44 @@ class DuckDB:
             True if successful, False otherwise
         """
         import time
-        logging.info(f"Creating unified view from {len(csv_patterns)} CSV files using batched read_csv_auto...")
+        logging.info(f"Creating unified view from {len(csv_patterns)} CSV files using incremental processing...")
         start_time = time.time()
 
         try:
-            # Process files in batches to avoid OOM with large file counts
-            BATCH_SIZE = 25  # Process 25 files at a time
+            # Process files in very small batches to minimize memory usage
+            BATCH_SIZE = 5  # Process only 5 files at a time to stay under 2GB memory limit
             options = self._get_read_csv_auto_options()
 
-            # Split files into batches
+            # Split files into small batches
             all_batches = [csv_patterns[i:i + BATCH_SIZE]
                            for i in range(0, len(csv_patterns), BATCH_SIZE)]
 
-            # Build UNION ALL query for all batches
-            union_parts = []
-            for batch_idx, batch in enumerate(all_batches, start=1):
-                file_list = ", ".join([f"'{pattern}'" for pattern in batch])
-                logging.info(f"Preparing batch {batch_idx}/{len(all_batches)} ({len(batch)} files)...")
-
-                union_parts.append(f"""
-                    SELECT * EXCLUDE (filename)
-                    FROM read_csv_auto([{file_list}],
-                                       {options},
-                                       union_by_name=true)
-                """)
-
-            # Combine all batches with UNION ALL BY NAME
-            logging.info("Creating unified table from all batches...")
-            union_query = "\nUNION ALL BY NAME\n".join(union_parts)
+            # Process first batch to create the table
+            first_batch = all_batches[0]
+            file_list = ", ".join([f"'{pattern}'" for pattern in first_batch])
+            logging.info(f"Creating base table from first {len(first_batch)} files...")
 
             self.con.execute(f"""
                 CREATE OR REPLACE TABLE raw_unified AS
-                {union_query};
+                SELECT * EXCLUDE (filename)
+                FROM read_csv_auto([{file_list}],
+                                   {options},
+                                   union_by_name=true);
             """)
+
+            # Process remaining batches one at a time, inserting with union_by_name
+            for batch_idx, batch in enumerate(all_batches[1:], start=2):
+                file_list = ", ".join([f"'{pattern}'" for pattern in batch])
+                logging.info(f"Processing batch {batch_idx}/{len(all_batches)} ({len(batch)} files)...")
+
+                # Use INSERT BY NAME to handle different column sets
+                self.con.execute(f"""
+                    INSERT INTO raw_unified BY NAME
+                    SELECT * EXCLUDE (filename)
+                    FROM read_csv_auto([{file_list}],
+                                       {options},
+                                       union_by_name=true);
+                """)
 
             # Build SELECT with column aliases for final view
             select_parts = []
