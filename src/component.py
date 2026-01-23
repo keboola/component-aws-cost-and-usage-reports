@@ -352,12 +352,18 @@ class Component(KBCEnvHandler):
         # Normalize all unique raw columns
         normalized = self._kbc_normalize_header(all_raw_cols)
 
-        # Merge with previous state (already normalized and deduplicated)
-        normalized.extend(self.last_header)
+        # Add only NEW columns not in last_header (compare case-insensitive)
+        last_header_lower = set(c.lower() for c in self.last_header)
+        new_cols = [c for c in normalized if c.lower() not in last_header_lower]
 
-        # Deduplicate case-insensitive (handles case variants like "owner" vs "Owner")
-        self.last_header = self._dedupe_header(normalized)
-        self.last_header.sort()
+        # Merge new columns with previous state
+        all_cols = list(self.last_header)
+        all_cols.extend(new_cols)
+
+        # Deduplicate only the new columns (last_header is already deduplicated)
+        if new_cols:
+            self.last_header = self._dedupe_header(all_cols)
+            self.last_header.sort()
 
         return self.last_header
 
