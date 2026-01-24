@@ -238,9 +238,7 @@ class Component(KBCEnvHandler):
         logging.info(
             f"Uploading report ID {manifest['assemblyId']} for period {manifest['period']}"
             f" in {len(manifest['reportKeys'])} report chunks.")
-        # Get columns in manifest order (preserves CSV column positions)
-        # but use deduplicated names from last_header to match table schema
-        columns = self._get_manifest_columns_mapped_to_header(manifest)
+        columns = self._get_manifest_normalized_columns(manifest)
         is_zip = True if manifest['reportKeys'] and manifest['reportKeys'][0].endswith('zip') else False
         if is_zip:
             logging.info("Processing zip file via local stage")
@@ -339,31 +337,18 @@ class Component(KBCEnvHandler):
             self.report_prefix = self.report_prefix + '*'
 
     def _get_max_header_normalized(self, manifests):
-        # Collect all unique raw columns from all manifests (before normalization)
-        all_raw_cols = []
-        seen_raw = set()
         for m in manifests:
-            for col in m['columns']:
-                raw_col = col['category'] + '/' + col['name']
-                if raw_col not in seen_raw:
-                    all_raw_cols.append(raw_col)
-                    seen_raw.add(raw_col)
+            # normalize
+            norm_cols = set(self._get_manifest_normalized_columns(m))
+            if not norm_cols.issubset(set(self.last_header)):
+                norm_cols.update(set(self.last_header))
+                self.last_header = list(norm_cols)
+                self.last_header.sort()
 
-        # Normalize all unique raw columns
-        normalized = self._kbc_normalize_header(all_raw_cols)
-
-        # Add only NEW columns not in last_header (compare case-insensitive)
-        last_header_lower = set(c.lower() for c in self.last_header)
-        new_cols = [c for c in normalized if c.lower() not in last_header_lower]
-
-        # Merge new columns with previous state
-        all_cols = list(self.last_header)
-        all_cols.extend(new_cols)
-
-        # Deduplicate only the new columns (last_header is already deduplicated)
-        if new_cols:
-            self.last_header = self._dedupe_header(all_cols)
-            # DO NOT sort - preserve column order from manifests for correct CSV mapping
+        # Apply case-insensitive deduplication to handle case variants across manifests
+        # (e.g., "user_Owner" and "user_owner" from different manifests)
+        self.last_header = self._dedupe_header(self.last_header)
+        self.last_header.sort()
 
         return self.last_header
 
@@ -373,62 +358,6 @@ class Component(KBCEnvHandler):
                     for col in manifest['columns']]
         man_cols = self._kbc_normalize_header(man_cols)
         return self._dedupe_header(man_cols)
-
-    def _get_manifest_columns_mapped_to_header(self, manifest):
-        """
-        Get manifest columns in their original order (preserving CSV positions),
-        using deduplicated names from last_header for table column matching.
-        """
-        # Get raw columns in manifest order
-        man_raw_cols = [col['category'] + '/' + col['name'] for col in manifest['columns']]
-        # Normalize them
-        man_normalized = self._kbc_normalize_header(man_raw_cols)
-
-        # Create case-insensitive lookup map from last_header
-        # Maps base name (lowercase, without _N suffix) to list of variants
-        header_lookup = {}
-        for col in self.last_header:
-            # Get base name without _1, _2 suffix
-            base = col
-            if '_' in col:
-                parts = col.rsplit('_', 1)
-                if len(parts) == 2 and parts[1].isdigit():
-                    base = parts[0]
-            base_lower = base.lower()
-            if base_lower not in header_lookup:
-                header_lookup[base_lower] = []
-            header_lookup[base_lower].append(col)
-
-        # Map each manifest column to corresponding last_header name
-        # Preserve manifest order, track which variants we've used
-        result = []
-        used_counts = {}  # Track how many times we've used each base name
-
-        for norm_col in man_normalized:
-            # Get base name (without potential _N suffix from this normalization)
-            base = norm_col
-            if '_' in norm_col:
-                parts = norm_col.rsplit('_', 1)
-                if len(parts) == 2 and parts[1].isdigit():
-                    base = parts[0]
-            base_lower = base.lower()
-
-            # Find matching column in last_header
-            if base_lower in header_lookup:
-                variants = header_lookup[base_lower]
-                # Use the Nth variant where N = how many times we've seen this base
-                idx = used_counts.get(base_lower, 0)
-                if idx < len(variants):
-                    result.append(variants[idx])
-                else:
-                    # Shouldn't happen, but fallback to last variant
-                    result.append(variants[-1])
-                used_counts[base_lower] = idx + 1
-            else:
-                # Column not in last_header (shouldn't happen if max_header is correct)
-                result.append(norm_col)
-
-        return result
 
     def _kbc_normalize_header(self, header):
         normalized = []
