@@ -345,6 +345,10 @@ class Component(KBCEnvHandler):
                 self.last_header = list(norm_cols)
                 self.last_header.sort()
 
+        # Deduplicate case-insensitive to handle case variants from different manifests
+        # e.g., "user_owner" and "user_Owner" -> "user_owner", "user_Owner_1"
+        self.last_header = self._dedupe_header(self.last_header)
+
         return self.last_header
 
     def _get_manifest_normalized_columns(self, manifest):
