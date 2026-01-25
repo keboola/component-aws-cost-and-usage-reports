@@ -155,10 +155,15 @@ class Component(KBCEnvHandler):
 
         # get max header
         max_header = self._get_max_header_normalized(manifests)
+
+        # Deduplicate case-insensitive for table creation and manifest
+        # (Storage is case-insensitive, so we need unique lowercase column names)
+        self.last_header = self._dedupe_header(sorted(max_header))
+
         # create result table
         self.snowflake_client.open_connection()
         try:
-            self._create_result_table(report_name, max_header)
+            self._create_result_table(report_name, self.last_header)
 
             for man in manifests:
                 # just in case
@@ -190,6 +195,7 @@ class Component(KBCEnvHandler):
         incremental = bool(loading_options.get(
             KEY_LOADING_OPTIONS_INCREMENTAL_OUTPUT, False))
         pkey = loading_options.get(KEY_LOADING_OPTIONS_PKEY, [])
+        # self.last_header is already case-insensitive deduplicated
         self.configuration.write_table_manifest(output_table,
                                                 columns=self.last_header,
                                                 primary_key=pkey,
@@ -345,11 +351,6 @@ class Component(KBCEnvHandler):
                 self.last_header = list(norm_cols)
                 self.last_header.sort()
 
-        # Apply case-insensitive deduplication to handle case variants across manifests
-        # (e.g., "user_Owner" and "user_owner" from different manifests)
-        self.last_header = self._dedupe_header(self.last_header)
-        self.last_header.sort()
-
         return self.last_header
 
     def _get_manifest_normalized_columns(self, manifest):
@@ -357,7 +358,52 @@ class Component(KBCEnvHandler):
         man_cols = [col['category'] + '/' + col['name']
                     for col in manifest['columns']]
         man_cols = self._kbc_normalize_header(man_cols)
-        return self._dedupe_header(man_cols)
+
+        # Deduplicate within manifest (for case where manifest has duplicate columns)
+        man_cols_deduped = self._dedupe_header(man_cols)
+
+        # Map to deduplicated names from self.last_header using occurrence order
+        # Build map of base name (lowercase) to list of variants in last_header
+        last_header_variants = {}
+        for col in self.last_header:
+            # Get base name by removing _N suffix
+            base = col
+            if '_' in col:
+                parts = col.rsplit('_', 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    base = parts[0]
+            base_lower = base.lower()
+            if base_lower not in last_header_variants:
+                last_header_variants[base_lower] = []
+            last_header_variants[base_lower].append(col)
+
+        # Map each manifest column to corresponding last_header variant by occurrence
+        result = []
+        used_counts = {}  # Track how many times we've used each base name
+
+        for col in man_cols_deduped:
+            # Get base name
+            base = col
+            if '_' in col:
+                parts = col.rsplit('_', 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    base = parts[0]
+            base_lower = base.lower()
+
+            if base_lower in last_header_variants:
+                variants = last_header_variants[base_lower]
+                idx = used_counts.get(base_lower, 0)
+                if idx < len(variants):
+                    result.append(variants[idx])
+                else:
+                    # More occurrences in manifest than in last_header, use last variant
+                    result.append(variants[-1])
+                used_counts[base_lower] = idx + 1
+            else:
+                # Column not in last_header (shouldn't happen)
+                result.append(col)
+
+        return result
 
     def _kbc_normalize_header(self, header):
         normalized = []
