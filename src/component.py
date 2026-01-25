@@ -356,7 +356,57 @@ class Component(KBCEnvHandler):
         man_cols = [col['category'] + '/' + col['name']
                     for col in manifest['columns']]
         man_cols = self._kbc_normalize_header(man_cols)
-        return self._dedupe_header(man_cols)
+        man_cols_deduped = self._dedupe_header(man_cols)
+
+        # Map manifest columns to actual table column names from self.last_header
+        # (handles case where self.last_header was deduplicated case-insensitive)
+
+        # Build map with all case variants (list of variants per base name without _N suffix)
+        last_header_map = {}
+        for col in self.last_header:
+            # Remove _N suffix to get base name
+            base = col
+            if '_' in col:
+                parts = col.rsplit('_', 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    base = parts[0]
+            base_lower = base.lower()
+            if base_lower not in last_header_map:
+                last_header_map[base_lower] = []
+            last_header_map[base_lower].append(col)
+
+        result = []
+        used = set()  # Track which columns we've already used
+
+        for col in man_cols_deduped:
+            # Try exact match first
+            if col in self.last_header:
+                result.append(col)
+                used.add(col)
+            else:
+                # Get base name (without _N suffix if present)
+                base = col
+                if '_' in col:
+                    parts = col.rsplit('_', 1)
+                    if len(parts) == 2 and parts[1].isdigit():
+                        base = parts[0]
+                base_lower = base.lower()
+
+                # Find first unused variant
+                if base_lower in last_header_map:
+                    for variant in last_header_map[base_lower]:
+                        if variant not in used:
+                            result.append(variant)
+                            used.add(variant)
+                            break
+                    else:
+                        # All variants used, fallback
+                        result.append(col)
+                else:
+                    # No match found
+                    result.append(col)
+
+        return result
 
     def _kbc_normalize_header(self, header):
         normalized = []
