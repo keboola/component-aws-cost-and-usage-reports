@@ -345,14 +345,40 @@ class Component(KBCEnvHandler):
                 self.last_header = list(norm_cols)
                 self.last_header.sort()
 
+        # Merge case-insensitive variants (e.g., "user_owner" and "user_Owner")
+        # Keeps first occurrence, discards case variants
+        self.last_header = self._merge_case_variants(self.last_header)
+
         return self.last_header
+
+    def _merge_case_variants(self, header):
+        """
+        Merges case-insensitive variants into single column (first occurrence).
+        Example: ["user_owner", "user_Owner"] -> ["user_owner"]
+        """
+        seen_lower = set()
+        result = []
+
+        for c in header:
+            c_lower = c.lower()
+            if c_lower not in seen_lower:
+                seen_lower.add(c_lower)
+                result.append(c)  # Keep first occurrence with original case
+            # Subsequent case variants are discarded
+
+        return result
 
     def _get_manifest_normalized_columns(self, manifest):
         # normalize
         man_cols = [col['category'] + '/' + col['name']
                     for col in manifest['columns']]
         man_cols = self._kbc_normalize_header(man_cols)
-        return self._dedupe_header(man_cols)
+        man_cols = self._dedupe_header(man_cols)
+
+        # Map to canonical names from self.last_header (case-insensitive match)
+        # This ensures COPY INTO uses column names that exist in the table
+        canonical_map = {c.lower(): c for c in self.last_header}
+        return [canonical_map.get(c.lower(), c) for c in man_cols]
 
     def _kbc_normalize_header(self, header):
         normalized = []
@@ -360,7 +386,7 @@ class Component(KBCEnvHandler):
         for h in header:
             new_h = h.replace('/', '__')
             new_h = re.sub("[^a-zA-Z\\d_]", "_", new_h)
-            normalized.append(new_h.lower())  # Force lowercase for case-insensitive compatibility
+            normalized.append(new_h)
         return normalized
 
     def _dedupe_header(self, header, index_separator='_'):
