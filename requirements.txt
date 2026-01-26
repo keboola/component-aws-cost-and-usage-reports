@@ -4,6 +4,7 @@ mock
 freezegun
 boto3>=1.26.0,<2.0.0
 botocore>=1.29.0,<2.0.0
+SQLAlchemy>=1.4.0,<2.0.0
 snowflake-connector-python>=2.9.0,<3.0.0
 snowflake-sqlalchemy>=1.4.0,<2.0.0
 dateparser>=1.0.0
