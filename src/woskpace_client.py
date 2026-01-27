@@ -27,7 +27,7 @@ class SnowflakeClient:
         if self._connection.closed:
             self.open_connection()
 
-        results = self._connection.execute(sqlalchemy.text(query)).fetchall()
+        results = self._connection.execute(query).fetchall()
         return results
 
     def open_connection(self):
