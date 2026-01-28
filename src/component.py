@@ -337,6 +337,10 @@ class Component(KBCEnvHandler):
             self.report_prefix = self.report_prefix + '*'
 
     def _get_max_header_normalized(self, manifests):
+        # If no manifests provided, return header from state
+        if not manifests:
+            return self.last_header
+
         for m in manifests:
             # normalize
             norm_cols = set(self._get_manifest_normalized_columns(m))
@@ -345,14 +349,42 @@ class Component(KBCEnvHandler):
                 self.last_header = list(norm_cols)
                 self.last_header.sort()
 
+        # Merge case-insensitive variants (e.g., "user_owner" and "user_Owner")
+        # Keeps first occurrence after sort, discards case variants
+        self.last_header = self._merge_case_variants(self.last_header)
+
         return self.last_header
+
+    def _merge_case_variants(self, header):
+        """
+        Merges case-insensitive variants into single column (first after sort).
+        Note: Input header is already sorted alphabetically (line 346),
+        so uppercase variants appear before lowercase in ASCII order.
+        Example: ["USER_owner", "user_owner"] -> ["USER_owner"]
+        """
+        seen_lower = set()
+        result = []
+
+        for c in header:
+            c_lower = c.lower()
+            if c_lower not in seen_lower:
+                seen_lower.add(c_lower)
+                result.append(c)  # Keep first after sort (uppercase letters first)
+            # Subsequent case variants are discarded
+
+        return result
 
     def _get_manifest_normalized_columns(self, manifest):
         # normalize
         man_cols = [col['category'] + '/' + col['name']
                     for col in manifest['columns']]
         man_cols = self._kbc_normalize_header(man_cols)
-        return self._dedupe_header(man_cols)
+        man_cols = self._dedupe_header(man_cols)
+
+        # Map to canonical names from self.last_header (case-insensitive match)
+        # This ensures COPY INTO uses column names that exist in the table
+        canonical_map = {c.lower(): c for c in self.last_header}
+        return [canonical_map.get(c.lower(), c) for c in man_cols]
 
     def _kbc_normalize_header(self, header):
         normalized = []
