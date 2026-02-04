@@ -68,14 +68,15 @@ class Component(ComponentBase):
             logging.exception(e)
             exit(1)
 
-        self.bucket = self.configuration.parameters[KEY_AWS_PARAMS][KEY_AWS_S3_BUCKET]
+        aws_params = self.configuration.parameters[KEY_AWS_PARAMS]
+        self.bucket = aws_params[KEY_AWS_S3_BUCKET]
         self.report_prefix = self.configuration.parameters[KEY_REPORT_PATH_PREFIX]
         self._cleanup_report_prefix()
 
         self.s3_client = boto3.client('s3',
-                                      region_name=self.configuration.parameters[KEY_AWS_PARAMS][KEY_AWS_REGION],
-                                      aws_access_key_id=self.configuration.parameters[KEY_AWS_PARAMS][KEY_AWS_API_KEY_ID],
-                                      aws_secret_access_key=self.configuration.parameters[KEY_AWS_PARAMS][KEY_AWS_API_KEY_SECRET])
+                                      region_name=aws_params[KEY_AWS_REGION],
+                                      aws_access_key_id=aws_params[KEY_AWS_API_KEY_ID],
+                                      aws_secret_access_key=aws_params[KEY_AWS_API_KEY_SECRET])
 
         # Initialize DuckDB client for local processing
         self.duckdb_client = DuckDBClient()
@@ -251,11 +252,12 @@ class Component(ComponentBase):
                 self.duckdb_client.load_csv_file(table_name, columns, res_gz)
             else:
                 # Load directly from S3 using DuckDB
+                aws_params = self.configuration.parameters[KEY_AWS_PARAMS]
                 self.duckdb_client.load_csv_from_s3(table_name,
                                                     columns,
                                                     s3_path,
-                                                    self.configuration.parameters[KEY_AWS_PARAMS][KEY_AWS_API_KEY_ID],
-                                                    self.configuration.parameters[KEY_AWS_PARAMS][KEY_AWS_API_KEY_SECRET])
+                                                    aws_params[KEY_AWS_API_KEY_ID],
+                                                    aws_params[KEY_AWS_API_KEY_SECRET])
 
     def _read_s3_file_contents(self, key):
         try:

@@ -1,4 +1,3 @@
-import csv
 import logging
 import os
 import duckdb
@@ -80,7 +79,7 @@ class DuckDBClient:
             raise
 
     def load_csv_from_s3(self, table_name: str, table_columns: list[str],
-                        s3_path: str, aws_access_key_id: str, aws_secret_access_key: str):
+                         s3_path: str, aws_access_key_id: str, aws_secret_access_key: str):
         """
         Load CSV directly from S3 using DuckDB's httpfs extension.
 
