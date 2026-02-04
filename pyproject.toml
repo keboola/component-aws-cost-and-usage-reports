@@ -16,6 +16,9 @@ dependencies = [
     "dateparser>=1.2.0",
     "pytz>=2024.1",
     "regex>=2024.0.0",
+    "flake8>=7.3.0",
+    "mock>=4.0.0",
+    "freezegun>=1.2.0",
 ]
 
 [project.optional-dependencies]
