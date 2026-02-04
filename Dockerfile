@@ -10,9 +10,10 @@ RUN apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/
 
 WORKDIR /code/
 
-# Copy pyproject.toml, README, and source files
-COPY pyproject.toml README.md /code/
+# Copy pyproject.toml, README, config files, source and tests
+COPY pyproject.toml README.md flake8.cfg /code/
 COPY src/ /code/src/
+COPY tests/ /code/tests/
 
 # Install dependencies using UV (10-100x faster than pip)
 RUN uv pip install --system --no-cache .
