@@ -11,4 +11,9 @@ test.py
 # kbc datafolder
 /data
 
+# Virtual environments
 venv/
+.venv/
+
+# UV cache
+.uv/

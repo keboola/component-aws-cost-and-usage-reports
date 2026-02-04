@@ -77,6 +77,48 @@ columns respectively
 
 # Development
 
+This project uses [UV](https://docs.astral.sh/uv/) for fast dependency management (10-100x faster than pip).
+
+## Local Development with UV
+
+Install UV if you haven't already:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Clone the repository and set up the environment:
+```bash
+git clone repo_path my-new-component
+cd my-new-component
+
+# Create virtual environment and install dependencies using UV
+uv venv
+source .venv/bin/activate  # On Unix/macOS
+# or
+.venv\Scripts\activate  # On Windows
+
+# Install dependencies (UV is much faster than pip)
+uv pip install -r requirements.txt
+
+# Run the component
+python src/component.py
+```
+
+Run tests:
+```bash
+python -m unittest discover
+```
+
+### Why UV?
+
+UV is a modern, extremely fast Python package installer and resolver:
+- **10-100x faster** than pip for installing packages
+- Drop-in replacement for pip, virtualenv, and pip-tools
+- Better dependency resolution
+- Used in Dockerfile for faster builds
+
+## Docker Development
+
 If required, change local data folder (the `CUSTOM_FOLDER` placeholder) path to your custom path in the docker-compose file:
 
 ```yaml
@@ -85,18 +127,16 @@ If required, change local data folder (the `CUSTOM_FOLDER` placeholder) path to 
       - ./CUSTOM_FOLDER:/data
 ```
 
-Clone this repository, init the workspace and run the component with following command:
+Run the component using Docker:
 
-```
-git clone repo_path my-new-component
-cd my-new-component
+```bash
 docker-compose build
 docker-compose run --rm dev
 ```
 
 Run the test suite and lint check using this command:
 
-```
+```bash
 docker-compose run --rm test
 ```
 
