@@ -231,7 +231,9 @@ class Component(ComponentBase):
         logging.info(
             f"Loading report ID {manifest['assemblyId']} for period {manifest['period']}"
             f" in {len(manifest['reportKeys'])} report chunks.")
-        columns = self._get_manifest_normalized_columns(manifest)
+        # Get both original and normalized column names
+        original_columns = [col['category'] + '/' + col['name'] for col in manifest['columns']]
+        normalized_columns = self._get_manifest_normalized_columns(manifest)
         is_zip = True if manifest['reportKeys'] and manifest['reportKeys'][0].endswith('zip') else False
         if is_zip:
             logging.info("Processing zip file via local processing")
@@ -249,12 +251,13 @@ class Component(ComponentBase):
             if s3_path.endswith('.zip'):
                 # download zip and extract
                 res_gz = self._download_and_unzip(key, f'/tmp/{key_split[-1]}.zip')
-                self.duckdb_client.load_csv_file(table_name, columns, res_gz)
+                self.duckdb_client.load_csv_file(table_name, original_columns, normalized_columns, res_gz)
             else:
                 # Load directly from S3 using DuckDB
                 aws_params = self.configuration.parameters[KEY_AWS_PARAMS]
                 self.duckdb_client.load_csv_from_s3(table_name,
-                                                    columns,
+                                                    original_columns,
+                                                    normalized_columns,
                                                     s3_path,
                                                     aws_params[KEY_AWS_API_KEY_ID],
                                                     aws_params[KEY_AWS_API_KEY_SECRET])

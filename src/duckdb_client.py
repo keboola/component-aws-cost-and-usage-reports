@@ -49,26 +49,33 @@ class DuckDBClient:
         logging.debug(f"Creating table: {query}")
         self._connection.execute(query)
 
-    def load_csv_file(self, table_name: str, table_columns: list[str], csv_file_path: str):
+    def load_csv_file(self, table_name: str, original_columns: list[str],
+                      normalized_columns: list[str], csv_file_path: str):
         """
         Load a CSV file into the DuckDB table.
 
         Args:
             table_name: Target table name
-            table_columns: List of column names to load
+            original_columns: Original column names in CSV (e.g., "identity/LineItemId")
+            normalized_columns: Normalized column names in table (e.g., "identity__LineItemId")
             csv_file_path: Path to the CSV file
         """
         logging.debug(f"Loading CSV file {csv_file_path} into table {table_name}")
 
-        # Prepare column list with quotes
-        columns_quoted = [f'"{col}"' for col in table_columns]
-        columns_str = ', '.join(columns_quoted)
+        # Build SELECT with original names and aliases to normalized names
+        select_parts = []
+        for orig, norm in zip(original_columns, normalized_columns):
+            select_parts.append(f'"{orig}" AS "{norm}"')
+        select_str = ', '.join(select_parts)
+
+        # Prepare normalized column list for INSERT
+        norm_columns_quoted = [f'"{col}"' for col in normalized_columns]
+        norm_columns_str = ', '.join(norm_columns_quoted)
 
         # Read CSV and insert into table
-        # DuckDB can handle CSV files directly
         query = f"""
-        INSERT INTO "{table_name}" ({columns_str})
-        SELECT {columns_str}
+        INSERT INTO "{table_name}" ({norm_columns_str})
+        SELECT {select_str}
         FROM read_csv_auto('{csv_file_path}',
             header=true,
             ignore_errors=true,
@@ -83,14 +90,16 @@ class DuckDBClient:
             logging.error(f"Error loading CSV file {csv_file_path}: {e}")
             raise
 
-    def load_csv_from_s3(self, table_name: str, table_columns: list[str],
-                         s3_path: str, aws_access_key_id: str, aws_secret_access_key: str):
+    def load_csv_from_s3(self, table_name: str, original_columns: list[str],
+                         normalized_columns: list[str], s3_path: str,
+                         aws_access_key_id: str, aws_secret_access_key: str):
         """
         Load CSV directly from S3 using DuckDB's httpfs extension.
 
         Args:
             table_name: Target table name
-            table_columns: List of column names to load
+            original_columns: Original column names in CSV (e.g., "identity/LineItemId")
+            normalized_columns: Normalized column names in table (e.g., "identity__LineItemId")
             s3_path: S3 path (s3://bucket/key)
             aws_access_key_id: AWS access key
             aws_secret_access_key: AWS secret key
@@ -105,14 +114,20 @@ class DuckDBClient:
         self._connection.execute(f"SET s3_access_key_id='{aws_access_key_id}'")
         self._connection.execute(f"SET s3_secret_access_key='{aws_secret_access_key}'")
 
-        # Prepare column list with quotes
-        columns_quoted = [f'"{col}"' for col in table_columns]
-        columns_str = ', '.join(columns_quoted)
+        # Build SELECT with original names and aliases to normalized names
+        select_parts = []
+        for orig, norm in zip(original_columns, normalized_columns):
+            select_parts.append(f'"{orig}" AS "{norm}"')
+        select_str = ', '.join(select_parts)
+
+        # Prepare normalized column list for INSERT
+        norm_columns_quoted = [f'"{col}"' for col in normalized_columns]
+        norm_columns_str = ', '.join(norm_columns_quoted)
 
         # Read from S3 and insert into table
         query = f"""
-        INSERT INTO "{table_name}" ({columns_str})
-        SELECT {columns_str}
+        INSERT INTO "{table_name}" ({norm_columns_str})
+        SELECT {select_str}
         FROM read_csv_auto('{s3_path}',
             header=true,
             ignore_errors=true,
