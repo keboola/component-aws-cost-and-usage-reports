@@ -231,9 +231,22 @@ class Component(ComponentBase):
         logging.info(
             f"Loading report ID {manifest['assemblyId']} for period {manifest['period']}"
             f" in {len(manifest['reportKeys'])} report chunks.")
-        # Get both original and normalized column names
-        original_columns = [col['category'] + '/' + col['name'] for col in manifest['columns']]
-        normalized_columns = self._get_manifest_normalized_columns(manifest)
+        # Build mapping between original CSV columns and normalized table columns
+        original_cols = [col['category'] + '/' + col['name'] for col in manifest['columns']]
+        normalized_temp = self._kbc_normalize_header(original_cols)
+        normalized_temp = self._dedupe_header(normalized_temp)
+
+        # Map to canonical names from self.last_header (table columns)
+        canonical_map = {c.lower(): c for c in self.last_header}
+
+        # Filter to only columns that exist in both CSV and table
+        original_columns = []
+        normalized_columns = []
+        for orig, norm_temp in zip(original_cols, normalized_temp):
+            canonical_name = canonical_map.get(norm_temp.lower(), norm_temp)
+            if canonical_name in self.last_header:
+                original_columns.append(orig)
+                normalized_columns.append(canonical_name)
         is_zip = True if manifest['reportKeys'] and manifest['reportKeys'][0].endswith('zip') else False
         if is_zip:
             logging.info("Processing zip file via local processing")
