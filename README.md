@@ -83,73 +83,33 @@ columns respectively
 
 # Development
 
-This project uses:
-- **Python 3.13** - Latest Python version
-- **[UV](https://docs.astral.sh/uv/)** - Fast dependency management (10-100x faster than pip)
-- **DuckDB** - Local data processing (replaces Snowflake workspace)
-- **[keboola.component](https://pypi.org/project/keboola.component/)** - Modern Keboola component library
+Requires **Python 3.13** and **[UV](https://docs.astral.sh/uv/)** package manager.
 
-## Local Development with UV
+## Local Development
 
-Install UV if you haven't already:
 ```bash
+# Install UV
 curl -LsSf https://astral.sh/uv/install.sh | sh
-```
 
-Clone the repository and set up the environment:
-```bash
+# Clone and setup
 git clone repo_path my-new-component
 cd my-new-component
-
-# Install dependencies and create virtual environment in one command
 uv sync
 
-# Activate the virtual environment
-source .venv/bin/activate  # On Unix/macOS
-# or
-.venv\Scripts\activate  # On Windows
-
-# Run the component
+# Run component
+source .venv/bin/activate
 PYTHONPATH=src python src/component.py
-```
 
-Run tests:
-```bash
+# Run tests
 python -m unittest discover
 flake8 src/ --config=flake8.cfg
 ```
 
-### Why UV?
-
-UV is a modern, extremely fast Python package installer and resolver:
-- **10-100x faster** than pip for installing packages
-- Automatic virtual environment management with `uv sync`
-- Uses `pyproject.toml` and `uv.lock` for reproducible builds
-- Drop-in replacement for pip, virtualenv, and pip-tools
-- Better dependency resolution
-- Used in Dockerfile for faster builds
-
 ## Docker Development
-
-If required, change local data folder (the `CUSTOM_FOLDER` placeholder) path to your custom path in the docker-compose file:
-
-```yaml
-    volumes:
-      - ./:/code
-      - ./CUSTOM_FOLDER:/data
-```
-
-Run the component using Docker:
 
 ```bash
 docker-compose build
 docker-compose run --rm dev
-```
-
-Run the test suite and lint check using this command:
-
-```bash
-docker-compose run --rm test
 ```
 
 # Integration
