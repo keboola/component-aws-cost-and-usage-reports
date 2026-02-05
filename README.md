@@ -25,8 +25,14 @@ in the selected granularity and CSV format. Follow this [guide](https://docs.aws
 
 # Functionality notes
 
-The extractor downloads the latest complete CUR report pushed to the S3. It handles changing report schema 
-by expanding the existing column set, if some column is removed it will contain NULL/Empty values.
+The extractor downloads AWS CUR reports from S3, processes them locally using DuckDB, and exports to CSV format.
+
+Key features:
+- **Local processing** with DuckDB (no Snowflake workspace required)
+- **Direct S3 loading** via DuckDB's httpfs extension for uncompressed files
+- **ZIP file support** with automatic extraction and processing
+- **Dynamic schema handling** - automatically expands column set when schema changes
+- **Incremental loading** - downloads only new reports when configured
 
 # Configuration
 
@@ -77,7 +83,11 @@ columns respectively
 
 # Development
 
-This project uses [UV](https://docs.astral.sh/uv/) for fast dependency management (10-100x faster than pip).
+This project uses:
+- **Python 3.13** - Latest Python version
+- **[UV](https://docs.astral.sh/uv/)** - Fast dependency management (10-100x faster than pip)
+- **DuckDB** - Local data processing (replaces Snowflake workspace)
+- **[keboola.component](https://pypi.org/project/keboola.component/)** - Modern Keboola component library
 
 ## Local Development with UV
 
@@ -91,28 +101,30 @@ Clone the repository and set up the environment:
 git clone repo_path my-new-component
 cd my-new-component
 
-# Create virtual environment and install dependencies using UV
-uv venv
+# Install dependencies and create virtual environment in one command
+uv sync
+
+# Activate the virtual environment
 source .venv/bin/activate  # On Unix/macOS
 # or
 .venv\Scripts\activate  # On Windows
 
-# Install dependencies (UV is much faster than pip)
-uv pip install -r requirements.txt
-
 # Run the component
-python src/component.py
+PYTHONPATH=src python src/component.py
 ```
 
 Run tests:
 ```bash
 python -m unittest discover
+flake8 src/ --config=flake8.cfg
 ```
 
 ### Why UV?
 
 UV is a modern, extremely fast Python package installer and resolver:
 - **10-100x faster** than pip for installing packages
+- Automatic virtual environment management with `uv sync`
+- Uses `pyproject.toml` and `uv.lock` for reproducible builds
 - Drop-in replacement for pip, virtualenv, and pip-tools
 - Better dependency resolution
 - Used in Dockerfile for faster builds
