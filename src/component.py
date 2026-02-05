@@ -166,7 +166,7 @@ class Component(ComponentBase):
             output_csv = f"{output_table}.csv"
             self.duckdb_client.export_to_csv(report_name, output_csv, max_header)
 
-            self._write_table_manifest(output_table)
+            self._write_table_manifest(output_table, report_name)
             self.write_state_file({"last_file_timestamp": since_timestamp.isoformat(),
                                    "last_report_id": latest_report_id,
                                    "report_header": self.last_header})
@@ -178,16 +178,21 @@ class Component(ComponentBase):
         finally:
             self.duckdb_client.close()
 
-    def _write_table_manifest(self, output_table):
+    def _write_table_manifest(self, output_table, report_name):
         loading_options = self.configuration.parameters.get(KEY_LOADING_OPTIONS, {})
         incremental = bool(loading_options.get(
             KEY_LOADING_OPTIONS_INCREMENTAL_OUTPUT, False))
         pkey = loading_options.get(KEY_LOADING_OPTIONS_PKEY, [])
-        # ComponentBase inherits from CommonInterface which has write_table_manifest
-        self.write_table_manifest(output_table,
-                                  columns=self.last_header,
-                                  primary_key=pkey,
-                                  incremental=incremental)
+
+        # Create table definition using ComponentBase API
+        table_def = self.create_out_table_definition(
+            name=f"{report_name}.csv",
+            incremental=incremental,
+            primary_key=pkey
+        )
+
+        # Write manifest using ComponentBase method
+        self.write_manifest(table_def)
 
     def _retrieve_report_manifests(self, all_files, report_name):
         manifests = []
