@@ -102,7 +102,7 @@ PYTHONPATH=src python src/component.py
 
 # Run tests
 python -m unittest discover
-flake8 src/ --config=flake8.cfg
+ruff check .
 ```
 
 ## Docker Development
