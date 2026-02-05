@@ -183,10 +183,11 @@ class Component(ComponentBase):
         incremental = bool(loading_options.get(
             KEY_LOADING_OPTIONS_INCREMENTAL_OUTPUT, False))
         pkey = loading_options.get(KEY_LOADING_OPTIONS_PKEY, [])
-        self.configuration.write_table_manifest(output_table,
-                                                columns=self.last_header,
-                                                primary_key=pkey,
-                                                incremental=incremental)
+        # ComponentBase inherits from CommonInterface which has write_table_manifest
+        self.write_table_manifest(output_table,
+                                  columns=self.last_header,
+                                  primary_key=pkey,
+                                  incremental=incremental)
 
     def _retrieve_report_manifests(self, all_files, report_name):
         manifests = []
