@@ -12,7 +12,11 @@ class DuckDBClient:
 
     def __init__(self):
         # Use in-memory database for processing
-        self._connection = duckdb.connect(':memory:')
+        # Set extension directory to /tmp to avoid permission issues in containers
+        self._connection = duckdb.connect(':memory:', config={
+            'extension_directory': '/tmp/duckdb_extensions',
+            'temp_directory': '/tmp/duckdb_temp'
+        })
         self._table_name = None
         self._output_path = None
 
