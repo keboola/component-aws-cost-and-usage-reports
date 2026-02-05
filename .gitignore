@@ -16,4 +16,4 @@ venv/
 .venv/
 
 # UV cache
-.uv/
+.uv/data_test/
