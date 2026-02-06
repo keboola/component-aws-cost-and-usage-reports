@@ -92,7 +92,8 @@ class DuckDBClient:
 
     def load_csv_from_s3(self, table_name: str, original_columns: list[str],
                          normalized_columns: list[str], s3_path: str,
-                         aws_access_key_id: str, aws_secret_access_key: str):
+                         aws_access_key_id: str, aws_secret_access_key: str,
+                         aws_region: str):
         """
         Load CSV directly from S3 using DuckDB's httpfs extension.
 
@@ -103,6 +104,7 @@ class DuckDBClient:
             s3_path: S3 path (s3://bucket/key)
             aws_access_key_id: AWS access key
             aws_secret_access_key: AWS secret key
+            aws_region: AWS region (e.g., "us-east-1", "eu-central-1")
         """
         logging.debug(f"Loading from S3: {s3_path}")
 
@@ -110,9 +112,10 @@ class DuckDBClient:
         self._connection.execute("INSTALL httpfs")
         self._connection.execute("LOAD httpfs")
 
-        # Set S3 credentials
+        # Set S3 credentials and region
         self._connection.execute(f"SET s3_access_key_id='{aws_access_key_id}'")
         self._connection.execute(f"SET s3_secret_access_key='{aws_secret_access_key}'")
+        self._connection.execute(f"SET s3_region='{aws_region}'")
 
         # Build SELECT with original names and aliases to normalized names
         select_parts = []

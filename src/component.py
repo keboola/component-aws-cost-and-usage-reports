@@ -281,7 +281,8 @@ class Component(ComponentBase):
                                                     normalized_columns,
                                                     s3_path,
                                                     aws_params[KEY_AWS_API_KEY_ID],
-                                                    aws_params[KEY_AWS_API_KEY_SECRET])
+                                                    aws_params[KEY_AWS_API_KEY_SECRET],
+                                                    aws_params[KEY_AWS_REGION])
 
     def _read_s3_file_contents(self, key):
         try:
