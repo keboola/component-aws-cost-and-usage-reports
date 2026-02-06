@@ -185,10 +185,12 @@ class Component(ComponentBase):
         pkey = loading_options.get(KEY_LOADING_OPTIONS_PKEY, [])
 
         # Create table definition using ComponentBase API
+        # schema must be provided for projects with new-native-types feature enabled
         table_def = self.create_out_table_definition(
             name=f"{report_name}.csv",
             incremental=incremental,
-            primary_key=pkey
+            primary_key=pkey,
+            schema=self.last_header
         )
 
         # Write manifest using ComponentBase method
