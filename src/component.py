@@ -2,18 +2,17 @@ import json
 import logging
 import os
 import re
-import sys
 import tempfile
 import zipfile
 from datetime import datetime
-from pathlib import Path
 
 import boto3
+import dateparser
 import pytz
 from botocore.exceptions import ClientError
-from kbc.env_handler import KBCEnvHandler
+from keboola.component.base import ComponentBase
 
-from woskpace_client import SnowflakeClient
+from duckdb_client import DuckDBClient
 
 # configuration variables
 # aws params
@@ -33,64 +32,30 @@ KEY_SINCE_LAST = 'since_last'
 
 KEY_REPORT_PATH_PREFIX = 'report_path_prefix'
 
-# #### Keep for debug
-KEY_DEBUG = 'debug'
-
-# list of mandatory parameters => if some is missing, component will fail with readable message on initialization.
+# list of mandatory parameters=> if some is missing, component will fail with readable message on initialization.
 MANDATORY_PARS = [KEY_AWS_PARAMS, KEY_REPORT_PATH_PREFIX]
 MANDATORY_IMAGE_PARS = []
 
 
-class Component(KBCEnvHandler):
+class Component(ComponentBase):
 
-    def __init__(self, debug=False):
-        # for easier local project setup
-        default_data_dir = Path(__file__).resolve().parent.parent.joinpath('data').as_posix() \
-            if not os.environ.get('KBC_DATADIR') else None
-
-        KBCEnvHandler.__init__(self, MANDATORY_PARS, log_level=logging.DEBUG if debug else logging.INFO,
-                               data_path=default_data_dir)
-        # override debug from config
-        if self.cfg_params.get(KEY_DEBUG):
-            debug = True
-
-        if debug:
-            logging.getLogger().setLevel(logging.DEBUG)
-        else:
-            logging.getLogger('snowflake.connector').setLevel(
-                logging.WARNING)  # avoid detail logs from the library
+    def __init__(self):
+        super().__init__(required_parameters=MANDATORY_PARS,
+                         required_image_parameters=MANDATORY_IMAGE_PARS)
         logging.info('Loading configuration...')
 
-        try:
-            # validation of mandatory parameters. Produces ValueError
-            self.validate_config(MANDATORY_PARS)
-            self.validate_image_parameters(MANDATORY_IMAGE_PARS)
-        except ValueError as e:
-            logging.exception(e)
-            exit(1)
-
-        self.bucket = self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_S3_BUCKET]
-        self.report_prefix = self.cfg_params[KEY_REPORT_PATH_PREFIX]
+        aws_params = self.configuration.parameters[KEY_AWS_PARAMS]
+        self.bucket = aws_params[KEY_AWS_S3_BUCKET]
+        self.report_prefix = self.configuration.parameters[KEY_REPORT_PATH_PREFIX]
         self._cleanup_report_prefix()
 
         self.s3_client = boto3.client('s3',
-                                      region_name=self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_REGION],
-                                      aws_access_key_id=self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_ID],
-                                      aws_secret_access_key=self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_SECRET])
+                                      region_name=aws_params[KEY_AWS_REGION],
+                                      aws_access_key_id=aws_params[KEY_AWS_API_KEY_ID],
+                                      aws_secret_access_key=aws_params[KEY_AWS_API_KEY_SECRET])
 
-        snfk_authorisation = self.configuration.get_authorization()[
-            'workspace']
-        params = self.cfg_params  # noqa
-        snfwlk_credentials = {
-            "account": snfk_authorisation['host'].replace('.snowflakecomputing.com', ''),
-            "user": snfk_authorisation['user'],
-            "password": snfk_authorisation['password'],
-            "database": snfk_authorisation['database'],
-            "schema": snfk_authorisation['schema'],
-            "warehouse": snfk_authorisation['warehouse']
-        }
-
-        self.snowflake_client = SnowflakeClient(**snfwlk_credentials)
+        # Initialize DuckDB client for local processing
+        self.duckdb_client = DuckDBClient()
 
         # last state
         self.last_state = self.get_state_file()
@@ -101,7 +66,7 @@ class Component(KBCEnvHandler):
         '''
         Main execution code
         '''
-        params = self.cfg_params  # noqa
+        params = self.configuration.parameters  # noqa
 
         # last state
         since = params.get(KEY_MIN_DATE) if params.get(
@@ -156,7 +121,7 @@ class Component(KBCEnvHandler):
         # get max header
         max_header = self._get_max_header_normalized(manifests)
         # create result table
-        self.snowflake_client.open_connection()
+        self.duckdb_client.open_connection()
         try:
             self._create_result_table(report_name, max_header)
 
@@ -171,9 +136,19 @@ class Component(KBCEnvHandler):
                     since_timestamp = man['last_modified']
                     latest_report_id = man['assemblyId']
 
-                self._upload_report_chunks_to_workspace(man, report_name)
+                self._load_report_chunks_to_duckdb(man, report_name)
 
-            self._write_table_manifest(output_table)
+            # Export to CSV (VIEW approach discovers columns during export)
+            output_csv = f"{output_table}.csv"
+            self.duckdb_client.export_to_csv(report_name, output_csv, max_header)
+
+            # Update header with final columns from DuckDB (VIEW may have different normalization)
+            final_columns = self.duckdb_client.get_final_columns()
+            if final_columns:
+                self.last_header = final_columns
+                logging.info(f"Updated header with {len(final_columns)} columns from DuckDB VIEW")
+
+            self._write_table_manifest(output_table, report_name)
             self.write_state_file({"last_file_timestamp": since_timestamp.isoformat(),
                                    "last_report_id": latest_report_id,
                                    "report_header": self.last_header})
@@ -183,17 +158,26 @@ class Component(KBCEnvHandler):
         except Exception as e:
             raise e
         finally:
-            self.snowflake_client.close()
+            self.duckdb_client.close()
 
-    def _write_table_manifest(self, output_table):
-        loading_options = self.cfg_params.get(KEY_LOADING_OPTIONS, {})
+    def _write_table_manifest(self, output_table, report_name):
+        loading_options = self.configuration.parameters.get(KEY_LOADING_OPTIONS, {})
         incremental = bool(loading_options.get(
             KEY_LOADING_OPTIONS_INCREMENTAL_OUTPUT, False))
         pkey = loading_options.get(KEY_LOADING_OPTIONS_PKEY, [])
-        self.configuration.write_table_manifest(output_table,
-                                                columns=self.last_header,
-                                                primary_key=pkey,
-                                                incremental=incremental)
+
+        # Create table definition using ComponentBase API
+        # schema must be provided for projects with new-native-types feature enabled
+        table_def = self.create_out_table_definition(
+            name=f"{report_name}.csv",
+            incremental=incremental,
+            primary_key=pkey,
+            schema=self.last_header,
+            has_header=True
+        )
+
+        # Write manifest using ComponentBase method
+        self.write_manifest(table_def)
 
     def _retrieve_report_manifests(self, all_files, report_name):
         manifests = []
@@ -212,7 +196,32 @@ class Component(KBCEnvHandler):
                     f'/{manifest_file_name}', '')
                 manifest['period'] = parent_folder_name
                 manifests.append(manifest)
-        return manifests
+        return self._dedupe_manifests_by_period(manifests)
+
+    @staticmethod
+    def _dedupe_manifests_by_period(manifests):
+        """
+        Keep only the latest manifest (by last_modified) for each billing period.
+
+        AWS CUR regenerates entire billing periods when costs are updated retroactively.
+        Each regeneration creates a new assemblyId for the same period. Without dedup,
+        loading multiple versions of the same period causes duplicate rows.
+        """
+        latest_by_period = {}
+        for m in manifests:
+            period = m['period']
+            if period not in latest_by_period or m['last_modified'] > latest_by_period[period]['last_modified']:
+                if period in latest_by_period:
+                    logging.info(
+                        f"Replacing older report for period {period} "
+                        f"(assembly {latest_by_period[period]['assemblyId']}) "
+                        f"with newer version (assembly {m['assemblyId']})")
+                latest_by_period[period] = m
+        skipped = len(manifests) - len(latest_by_period)
+        if skipped > 0:
+            logging.info(f"Deduplicated manifests: kept {len(latest_by_period)} latest out of {len(manifests)} total "
+                         f"({skipped} older versions skipped)")
+        return list(latest_by_period.values())
 
     def _download_and_unzip(self, key: str, local_path) -> str:
         """
@@ -234,14 +243,29 @@ class Component(KBCEnvHandler):
         files = os.listdir(temp_dir)
         return os.path.join(temp_dir, files[0])
 
-    def _upload_report_chunks_to_workspace(self, manifest, table_name):
+    def _load_report_chunks_to_duckdb(self, manifest, table_name):
         logging.info(
-            f"Uploading report ID {manifest['assemblyId']} for period {manifest['period']}"
+            f"Loading report ID {manifest['assemblyId']} for period {manifest['period']}"
             f" in {len(manifest['reportKeys'])} report chunks.")
-        columns = self._get_manifest_normalized_columns(manifest)
+        # Build mapping between original CSV columns and normalized table columns
+        original_cols = [col['category'] + '/' + col['name'] for col in manifest['columns']]
+        normalized_temp = self._kbc_normalize_header(original_cols)
+        normalized_temp = self._dedupe_header(normalized_temp)
+
+        # Map to canonical names from self.last_header (table columns)
+        canonical_map = {c.lower(): c for c in self.last_header}
+
+        # Filter to only columns that exist in both CSV and table
+        original_columns = []
+        normalized_columns = []
+        for orig, norm_temp in zip(original_cols, normalized_temp):
+            canonical_name = canonical_map.get(norm_temp.lower(), norm_temp)
+            if canonical_name in self.last_header:
+                original_columns.append(orig)
+                normalized_columns.append(canonical_name)
         is_zip = True if manifest['reportKeys'] and manifest['reportKeys'][0].endswith('zip') else False
         if is_zip:
-            logging.info("Processing zip file via local stage")
+            logging.info("Processing zip file via local processing")
 
         for key in manifest['reportKeys']:
             # support for // syntax
@@ -252,19 +276,21 @@ class Component(KBCEnvHandler):
             # download
             s3_path = f's3://{self.bucket}/{key}'
 
-            logging.info(f"Uploading chunk {key_split[-1]}")
+            logging.info(f"Loading chunk {key_split[-1]}")
             if s3_path.endswith('.zip'):
-                # download zip
+                # download zip and extract
                 res_gz = self._download_and_unzip(key, f'/tmp/{key_split[-1]}.zip')
-
-                self.snowflake_client.copy_csv_into_table_from_file(table_name, columns, res_gz)
+                self.duckdb_client.load_csv_file(table_name, original_columns, normalized_columns, res_gz)
             else:
-                self.snowflake_client.copy_csv_into_table_from_s3(table_name,
-                                                                  columns,
-                                                                  s3_path,
-                                                                  self.cfg_params[KEY_AWS_PARAMS][KEY_AWS_API_KEY_ID],
-                                                                  self.cfg_params[KEY_AWS_PARAMS][
-                                                                      KEY_AWS_API_KEY_SECRET])
+                # Load directly from S3 using DuckDB
+                aws_params = self.configuration.parameters[KEY_AWS_PARAMS]
+                self.duckdb_client.load_csv_from_s3(table_name,
+                                                    original_columns,
+                                                    normalized_columns,
+                                                    s3_path,
+                                                    aws_params[KEY_AWS_API_KEY_ID],
+                                                    aws_params[KEY_AWS_API_KEY_SECRET],
+                                                    aws_params[KEY_AWS_REGION])
 
     def _read_s3_file_contents(self, key):
         try:
@@ -414,19 +440,44 @@ class Component(KBCEnvHandler):
         columns = []
         for h in max_header:
             columns.append({"name": h, "type": 'TEXT'})
-        self.snowflake_client.create_table(report_name, columns)
+        self.duckdb_client.create_table(report_name, columns)
+
+    def get_date_period_converted(self, since, until):
+        """
+        Convert date strings to datetime objects using dateparser.
+
+        Args:
+            since: Start date string (e.g., "2000-01-01", "5 days ago", etc.)
+            until: End date string (e.g., "now", "yesterday", "2024-01-01", etc.)
+
+        Returns:
+            Tuple of (start_date, end_date) as datetime objects
+        """
+        # Parse start date
+        if since:
+            start_date = dateparser.parse(since)
+            if not start_date:
+                raise ValueError(f"Unable to parse start date: {since}")
+        else:
+            start_date = datetime(2000, 1, 1)
+
+        # Parse end date
+        if until and until != 'now':
+            end_date = dateparser.parse(until)
+            if not end_date:
+                raise ValueError(f"Unable to parse end date: {until}")
+        else:
+            end_date = datetime.now()
+
+        return start_date, end_date
 
 
 """
         Main entrypoint
 """
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        debug_arg = sys.argv[1]
-    else:
-        debug_arg = False
     try:
-        comp = Component(debug_arg)
+        comp = Component()
         comp.run()
     except Exception as exc:
         logging.exception(exc)

@@ -25,8 +25,14 @@ in the selected granularity and CSV format. Follow this [guide](https://docs.aws
 
 # Functionality notes
 
-The extractor downloads the latest complete CUR report pushed to the S3. It handles changing report schema 
-by expanding the existing column set, if some column is removed it will contain NULL/Empty values.
+The extractor downloads AWS CUR reports from S3, processes them locally using DuckDB, and exports to CSV format.
+
+Key features:
+- **Local processing** with DuckDB (no Snowflake workspace required)
+- **Direct S3 loading** via DuckDB's httpfs extension for uncompressed files
+- **ZIP file support** with automatic extraction and processing
+- **Dynamic schema handling** - automatically expands column set when schema changes
+- **Incremental loading** - downloads only new reports when configured
 
 # Configuration
 
@@ -77,27 +83,33 @@ columns respectively
 
 # Development
 
-If required, change local data folder (the `CUSTOM_FOLDER` placeholder) path to your custom path in the docker-compose file:
+Requires **Python 3.13** and **[UV](https://docs.astral.sh/uv/)** package manager.
 
-```yaml
-    volumes:
-      - ./:/code
-      - ./CUSTOM_FOLDER:/data
-```
+## Local Development
 
-Clone this repository, init the workspace and run the component with following command:
+```bash
+# Install UV
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-```
+# Clone and setup
 git clone repo_path my-new-component
 cd my-new-component
+uv sync
+
+# Run component
+source .venv/bin/activate
+PYTHONPATH=src python src/component.py
+
+# Run tests
+python -m unittest discover
+ruff check .
+```
+
+## Docker Development
+
+```bash
 docker-compose build
 docker-compose run --rm dev
-```
-
-Run the test suite and lint check using this command:
-
-```
-docker-compose run --rm test
 ```
 
 # Integration
