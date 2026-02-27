@@ -18,7 +18,7 @@ dependencies = [
     "regex>=2024.0.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=7.0.0",
     "mock>=4.0.0",

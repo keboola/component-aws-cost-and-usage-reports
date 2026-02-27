@@ -1,16 +1,14 @@
 FROM python:3.13-slim
-ENV PYTHONIOENCODING=utf-8
-ENV PYTHONPATH=/code/src
-
-# Install UV
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /code/
 
-COPY pyproject.toml README.md /code/
+COPY pyproject.toml uv.lock README.md /code/
+
+ENV UV_PROJECT_ENVIRONMENT="/usr/local/"
+RUN uv sync --all-groups --frozen
+
 COPY src/ /code/src/
 COPY tests/ /code/tests/
-
-RUN uv pip install --system --no-cache ".[dev]"
 
 CMD ["python", "-u", "/code/src/component.py"]
