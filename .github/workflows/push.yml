@@ -4,7 +4,7 @@ on: [ push ]
 concurrency: ci-${{ github.ref }} # to avoid tag collisions in the ECR
 env:
   # repository variables:
-  KBC_DEVELOPERPORTAL_APP: "kds-team.ex-aws-cost-and-usage-reports" # replace with your component id
+  KBC_DEVELOPERPORTAL_APP: "kds-team.ex-aws-cost-and-usage-reports-test" # replace with your component id
   KBC_DEVELOPERPORTAL_VENDOR: "kds-team" # replace with your vendor
   DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USER }}
   KBC_DEVELOPERPORTAL_USERNAME: "kds-team+github"
@@ -122,7 +122,7 @@ jobs:
         run: |
           docker load --input /tmp/${{ env.KBC_DEVELOPERPORTAL_APP }}.tar
           docker image ls -a
-          docker run ${{ env.KBC_DEVELOPERPORTAL_APP }}:latest flake8 . --config=flake8.cfg
+          docker run ${{ env.KBC_DEVELOPERPORTAL_APP }}:latest ruff check .
           echo "Running unit-tests..."
           docker run ${{ env.KBC_DEVELOPERPORTAL_APP }}:latest python -m unittest discover
 

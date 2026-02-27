@@ -11,4 +11,6 @@ test.py
 # kbc datafolder
 /data
 
+# Virtual environments
 venv/
+.venv/
