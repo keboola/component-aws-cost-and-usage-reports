@@ -247,22 +247,18 @@ class Component(ComponentBase):
         logging.info(
             f"Loading report ID {manifest['assemblyId']} for period {manifest['period']}"
             f" in {len(manifest['reportKeys'])} report chunks.")
-        # Build mapping between original CSV columns and normalized table columns
+        # Build the full, physically-ordered list of normalized column names for the file.
+        # These names are case-insensitively unique (thanks to _dedupe_header) and are
+        # applied as an explicit header override in DuckDB, so source columns that differ
+        # only in letter case are kept distinct instead of being collapsed.
         original_cols = [col['category'] + '/' + col['name'] for col in manifest['columns']]
         normalized_temp = self._kbc_normalize_header(original_cols)
         normalized_temp = self._dedupe_header(normalized_temp)
 
-        # Map to canonical names from self.last_header (table columns)
+        # Map to canonical names from self.last_header (table columns), keeping every
+        # physical column so the override matches the CSV column count and order.
         canonical_map = {c.lower(): c for c in self.last_header}
-
-        # Filter to only columns that exist in both CSV and table
-        original_columns = []
-        normalized_columns = []
-        for orig, norm_temp in zip(original_cols, normalized_temp):
-            canonical_name = canonical_map.get(norm_temp.lower(), norm_temp)
-            if canonical_name in self.last_header:
-                original_columns.append(orig)
-                normalized_columns.append(canonical_name)
+        column_names = [canonical_map.get(norm_temp.lower(), norm_temp) for norm_temp in normalized_temp]
         is_zip = True if manifest['reportKeys'] and manifest['reportKeys'][0].endswith('zip') else False
         if is_zip:
             logging.info("Processing zip file via local processing")
@@ -280,13 +276,12 @@ class Component(ComponentBase):
             if s3_path.endswith('.zip'):
                 # download zip and extract
                 res_gz = self._download_and_unzip(key, f'/tmp/{key_split[-1]}.zip')
-                self.duckdb_client.load_csv_file(table_name, original_columns, normalized_columns, res_gz)
+                self.duckdb_client.load_csv_file(table_name, column_names, res_gz)
             else:
                 # Load directly from S3 using DuckDB
                 aws_params = self.configuration.parameters[KEY_AWS_PARAMS]
                 self.duckdb_client.load_csv_from_s3(table_name,
-                                                    original_columns,
-                                                    normalized_columns,
+                                                    column_names,
                                                     s3_path,
                                                     aws_params[KEY_AWS_API_KEY_ID],
                                                     aws_params[KEY_AWS_API_KEY_SECRET],

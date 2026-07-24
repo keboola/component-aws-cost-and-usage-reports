@@ -25,12 +25,16 @@ class DuckDBClient:
         self._connection.execute("SET threads=1")
         self._connection.execute("SET preserve_insertion_order=false")
 
-        # Track CSV files and column mappings for later VIEW creation
-        self._csv_files = []
+        # Track CSV files and their per-file column names for later VIEW creation.
+        # Each entry is a tuple: (file_path, [column names in physical order]).
+        # Names are the already-normalized, case-insensitively unique names produced
+        # by component.py, so they can be applied as an explicit header override. This
+        # avoids DuckDB's case-insensitive header handling collapsing source columns
+        # that differ only in letter case (e.g. "...user:Team" vs "...user:team").
+        self._files = []
         self._table_name = None
         self._aws_credentials = None
         self._final_columns = None  # Populated after export
-        self._column_mapping = {}  # original_name -> normalized_name (from manifests)
 
     def open_connection(self):
         """Compatibility method - connection is always open"""
@@ -72,40 +76,29 @@ class DuckDBClient:
         self._table_name = name
         logging.debug(f"Table name set to: {name} (VIEW will be created during export)")
 
-    def load_csv_file(self, table_name: str, original_columns: list[str],
-                      normalized_columns: list[str], csv_file_path: str):
+    def load_csv_file(self, table_name: str, column_names: list[str], csv_file_path: str):
         """
-        Add CSV file to processing queue and update column mapping.
+        Add CSV file to processing queue together with its column names.
 
         Args:
             table_name: Target table name
-            original_columns: Original column names from manifest (e.g., "identity/LineItemId")
-            normalized_columns: Normalized column names from component.py
+            column_names: Normalized, case-insensitively unique column names for the file,
+                in the same physical order as the columns in the CSV.
             csv_file_path: Path to the CSV file
         """
         logging.debug(f"Queueing CSV file for VIEW: {csv_file_path}")
-        self._csv_files.append(csv_file_path)
+        self._files.append((csv_file_path, column_names))
 
-        # Update global column mapping from manifest metadata
-        for orig, norm in zip(original_columns, normalized_columns):
-            if orig not in self._column_mapping:
-                self._column_mapping[orig] = norm
-            elif self._column_mapping[orig] != norm:
-                # Keep existing canonical mapping; ignore alternate variant to ensure stable target column
-                logging.debug(f"Column mapping alternate ignored for '{orig}': "
-                              f"'{self._column_mapping[orig]}' vs '{norm}'")
-
-    def load_csv_from_s3(self, table_name: str, original_columns: list[str],
-                         normalized_columns: list[str], s3_path: str,
+    def load_csv_from_s3(self, table_name: str, column_names: list[str], s3_path: str,
                          aws_access_key_id: str, aws_secret_access_key: str,
                          aws_region: str):
         """
-        Add S3 CSV to processing queue, configure S3 credentials, and update column mapping.
+        Add S3 CSV to processing queue and configure S3 credentials.
 
         Args:
             table_name: Target table name
-            original_columns: Original column names from manifest (e.g., "identity/LineItemId")
-            normalized_columns: Normalized column names from component.py
+            column_names: Normalized, case-insensitively unique column names for the file,
+                in the same physical order as the columns in the CSV.
             s3_path: S3 path (s3://bucket/key)
             aws_access_key_id: AWS access key
             aws_secret_access_key: AWS secret key
@@ -126,78 +119,76 @@ class DuckDBClient:
             self._aws_credentials = True
 
         logging.debug(f"Queueing S3 file for VIEW: {s3_path}")
-        self._csv_files.append(s3_path)
-
-        # Update global column mapping from manifest metadata
-        for orig, norm in zip(original_columns, normalized_columns):
-            if orig not in self._column_mapping:
-                self._column_mapping[orig] = norm
-            elif self._column_mapping[orig] != norm:
-                # Keep existing canonical mapping; ignore alternate variant to ensure stable target column
-                logging.debug(f"Column mapping alternate ignored for '{orig}': "
-                              f"'{self._column_mapping[orig]}' vs '{norm}'")
+        self._files.append((s3_path, column_names))
 
     def export_to_csv(self, table_name: str, output_path: str, columns: list[str]):
         """
         Create VIEW from queued files and export to CSV using streaming.
 
         Process:
-        1. Use column mapping from manifest metadata (passed via load_csv_* methods)
-        2. Create VIEW with column mapping (just SQL definition, no data)
-        3. COPY streams directly: Files -> normalization -> CSV
+        1. Read each file with its own explicit (already normalized) column names, so
+           DuckDB never sniffs the raw CSV header. Raw AWS CUR headers can contain
+           columns that differ only in letter case (e.g. "...user:Team" vs
+           "...user:team"); DuckDB treats identifiers case-insensitively, so relying on
+           its header handling would collapse such columns and lose one column's data.
+        2. Combine the per-file relations with UNION ALL BY NAME (aligns columns across
+           files by their normalized, case-insensitively unique names).
+        3. Project the expected header, filling any missing columns with NULL.
+        4. COPY streams directly: Files -> normalization -> CSV.
 
         Args:
             table_name: Source table name (VIEW name)
             output_path: Path to output CSV file
             columns: Expected columns from component.py (self.last_header)
         """
-        if not self._csv_files:
+        if not self._files:
             logging.warning("No CSV files queued for export")
             return
 
-        if not self._column_mapping:
-            raise ValueError("No column mapping provided. Call load_csv_* methods first.")
-
-        logging.info(f"Creating VIEW from {len(self._csv_files)} CSV files using manifest metadata...")
+        logging.info(f"Creating VIEW from {len(self._files)} CSV files using manifest metadata...")
         start_time = time.time()
 
         try:
             # Ensure output directory exists
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-            # Step 1: Use column mapping from manifest metadata (already normalized by component.py)
-            # This ensures we use the same normalization as v1.1.3 (from manifest category/name)
-            column_mappings = list(self._column_mapping.items())  # (original, normalized) tuples
-            mapped_normalized = {norm for orig, norm in column_mappings}
-            logging.info(f"Using {len(column_mappings)} columns from manifest metadata")
+            # Columns available across all queued files (normalized names from component.py)
+            available_columns = {name for _, names in self._files for name in names}
+            logging.info(f"Using {len(available_columns)} columns from manifest metadata")
 
-            # Step 2: Build SELECT with column mapping from manifest metadata
-            # Include ALL columns from expected header (self.last_header), filling missing with NULL
+            # Build per-file reads with explicit column names, then union them by name.
+            # union_by_name across a single read_csv_auto call would collapse case-only
+            # variants; supplying explicit unique names per file avoids that entirely.
+            options = self._get_read_csv_auto_options()
+            union_parts = []
+            for path, names in self._files:
+                escaped_path = path.replace("'", "''")
+                names_sql = ", ".join(self._quote_string(name) for name in names)
+                union_parts.append(f"SELECT * FROM read_csv_auto('{escaped_path}', {options}, names=[{names_sql}])")
+            union_sql = "\n                UNION ALL BY NAME\n                ".join(union_parts)
+
+            # Project the expected header, filling missing columns with NULL. All projected
+            # names are case-insensitively unique, so name resolution is unambiguous.
             select_parts = []
             new_header = list(columns)
             for col in columns:
-                if col in mapped_normalized:
-                    orig_col = next(orig for orig, norm in column_mappings if norm == col)
-                    select_parts.append(f"{self._quote_ident(orig_col)} AS {self._quote_ident(col)}")
+                if col in available_columns:
+                    select_parts.append(self._quote_ident(col))
                 else:
                     select_parts.append(f"NULL AS {self._quote_ident(col)}")
 
             select_sql = ",\n                ".join(select_parts)
 
-            # Step 3: Create VIEW with all files (lazy - no data loaded)
-            logging.info(f"Creating VIEW with {len(self._csv_files)} files (no data in memory)...")
-            # Escape single quotes in file paths
-            escaped_paths = [path.replace("'", "''") for path in self._csv_files]
-            all_files = ", ".join([f"'{path}'" for path in escaped_paths])
+            # Create VIEW with all files (lazy - no data loaded)
+            logging.info(f"Creating VIEW with {len(self._files)} files (no data in memory)...")
             quoted_table_name = self._quote_ident(table_name)
-            options = self._get_read_csv_auto_options()
 
             self._connection.execute(f"""
                 CREATE OR REPLACE VIEW {quoted_table_name} AS
                 SELECT {select_sql}
-                FROM read_csv_auto([{all_files}],
-                                   {options},
-                                   union_by_name=true);
+                FROM (
+                {union_sql}
+                );
             """)
 
             # Step 4: Export using COPY (streaming - no materialization)
@@ -231,19 +222,23 @@ class DuckDBClient:
         """
         return '"' + name.replace('"', '""') + '"'
 
+    @staticmethod
+    def _quote_string(value: str) -> str:
+        """Quote a SQL string literal with single quotes, escaping embedded quotes."""
+        return "'" + value.replace("'", "''") + "'"
+
     def _get_read_csv_auto_options(self) -> str:
         """
         Return standardized read_csv_auto options for consistent CSV parsing.
 
         Options:
-        - HEADER=TRUE: First row contains column names
+        - HEADER=TRUE: First row is the CSV header (skipped; column names come from the
+          explicit `names` override supplied per file)
         - ALL_VARCHAR=TRUE: Load all columns as strings to avoid type inference issues
         - NULLSTR: Treat these strings as NULL values
-        - filename=true: Add filename column for tracking source files
         - PARALLEL=FALSE: Single-threaded parsing to reduce memory usage
         """
         return """HEADER=TRUE,
                                            ALL_VARCHAR=TRUE,
                                            NULLSTR=['null', 'NULL', 'None'],
-                                           filename=true,
                                            PARALLEL=FALSE"""

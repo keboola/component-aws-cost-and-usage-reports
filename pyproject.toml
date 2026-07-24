@@ -1,6 +1,6 @@
 [project]
 name = "component-aws-cost-and-usage-reports"
-version = "1.1.4"
+version = "1.1.5"
 description = "AWS Cost and Usage Reports component for Keboola - DuckDB version"
 authors = [
     {name = "Keboola", email = "support@keboola.com"}
