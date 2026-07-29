@@ -156,15 +156,27 @@ class DuckDBClient:
             available_columns = {name for _, names in self._files for name in names}
             logging.info(f"Using {len(available_columns)} columns from manifest metadata")
 
-            # Build per-file reads with explicit column names, then union them by name.
-            # union_by_name across a single read_csv_auto call would collapse case-only
-            # variants; supplying explicit unique names per file avoids that entirely.
+            # Group files that share the exact same column layout so each group can be read
+            # by a single multi-file read_csv_auto (one streaming reader, low memory). Files
+            # are read with explicit column names so DuckDB never sniffs the raw CSV header;
+            # this keeps source columns that differ only in letter case distinct instead of
+            # collapsing them (DuckDB treats identifiers case-insensitively).
+            groups = {}
+            for path, names in self._files:
+                groups.setdefault(tuple(names), []).append(path)
+
             options = self._get_read_csv_auto_options()
             union_parts = []
-            for path, names in self._files:
-                escaped_path = path.replace("'", "''")
+            for names, paths in groups.items():
+                paths_sql = ", ".join(self._quote_string(p) for p in paths)
                 names_sql = ", ".join(self._quote_string(name) for name in names)
-                union_parts.append(f"SELECT * FROM read_csv_auto('{escaped_path}', {options}, names=[{names_sql}])")
+                # union_by_name=false: files within a group share an identical layout, so
+                # align by position and apply the explicit names.
+                union_parts.append(
+                    f"SELECT * FROM read_csv_auto([{paths_sql}], {options}, "
+                    f"union_by_name=false, names=[{names_sql}])"
+                )
+            # UNION ALL BY NAME reconciles differing layouts across groups by column name.
             union_sql = "\n                UNION ALL BY NAME\n                ".join(union_parts)
 
             # Project the expected header, filling missing columns with NULL. All projected
