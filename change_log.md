@@ -7,6 +7,9 @@
   `resourceTags/user:team`. Files that share an identical column layout are read with a
   single multi-file reader and only distinct layouts are combined with
   `UNION ALL BY NAME`, preserving the original low-memory streaming behaviour.
+  Reads use `union_by_name` + `null_padding`, so a chunk with fewer columns than its
+  manifest is NULL-padded rather than aborting the export (matches the previous
+  tolerant behaviour).
 
 **0.1.1**
 

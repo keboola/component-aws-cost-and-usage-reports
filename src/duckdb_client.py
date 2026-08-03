@@ -170,11 +170,14 @@ class DuckDBClient:
             for names, paths in groups.items():
                 paths_sql = ", ".join(self._quote_string(p) for p in paths)
                 names_sql = ", ".join(self._quote_string(name) for name in names)
-                # union_by_name=false: files within a group share an identical layout, so
-                # align by position and apply the explicit names.
+                # union_by_name=true aligns the explicit names across the group's files by
+                # name (not position), and null_padding (in the shared options) fills any
+                # column a given file happens to be missing with NULL. This mirrors the old
+                # tolerant behaviour: a file whose column count differs from its manifest no
+                # longer aborts the whole export.
                 union_parts.append(
                     f"SELECT * FROM read_csv_auto([{paths_sql}], {options}, "
-                    f"union_by_name=false, names=[{names_sql}])"
+                    f"union_by_name=true, names=[{names_sql}])"
                 )
             # UNION ALL BY NAME reconciles differing layouts across groups by column name.
             union_sql = "\n                UNION ALL BY NAME\n                ".join(union_parts)
@@ -248,9 +251,12 @@ class DuckDBClient:
           explicit `names` override supplied per file)
         - ALL_VARCHAR=TRUE: Load all columns as strings to avoid type inference issues
         - NULLSTR: Treat these strings as NULL values
+        - NULL_PADDING=TRUE: If a file has fewer columns than the `names` override, pad the
+          missing trailing columns with NULL instead of failing the whole export
         - PARALLEL=FALSE: Single-threaded parsing to reduce memory usage
         """
         return """HEADER=TRUE,
                                            ALL_VARCHAR=TRUE,
                                            NULLSTR=['null', 'NULL', 'None'],
+                                           NULL_PADDING=TRUE,
                                            PARALLEL=FALSE"""

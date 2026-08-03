@@ -74,6 +74,43 @@ class TestDuckDBClient(unittest.TestCase):
         self.assertEqual(data["li1"], ["platform", ""])
         self.assertEqual(data["li2"], ["", ""])
 
+    def test_file_shorter_than_names_does_not_abort(self):
+        """A chunk with fewer physical columns than its manifest must not abort the export.
+
+        Both chunks share the same (manifest-derived) column_names, so they land in one
+        read group; the short chunk's missing trailing column is NULL-padded instead of
+        raising an error (SUPPORT-17124 follow-up)."""
+        column_names = ["identity__LineItemId", "resourceTags__user_Team", "resourceTags__user_team_1"]
+        chunk_full = self._write_csv(
+            "full.csv",
+            [
+                ["identity/LineItemId", "resourceTags/user:Team", "resourceTags/user:team"],
+                ["li1", "platform", "pod-a"],
+            ],
+        )
+        # Physically only two columns although the manifest declares three.
+        chunk_short = self._write_csv(
+            "short.csv",
+            [["identity/LineItemId", "resourceTags/user:Team"], ["li2", "data"]],
+        )
+
+        client = DuckDBClient()
+        try:
+            client.create_table("report", [{"name": c, "type": "TEXT"} for c in column_names])
+            client.load_csv_file("report", column_names, chunk_full)
+            client.load_csv_file("report", column_names, chunk_short)
+            out_path = os.path.join(self.tmp_dir, "out.csv")
+            client.export_to_csv("report", out_path, column_names)
+        finally:
+            client.close()
+
+        rows = self._read_csv(out_path)
+        self.assertEqual(rows[0], column_names)
+        data = {r[0]: r[1:] for r in rows[1:]}
+        self.assertEqual(data["li1"], ["platform", "pod-a"])
+        # Missing third column padded with NULL (empty CSV field).
+        self.assertEqual(data["li2"], ["data", ""])
+
 
 if __name__ == "__main__":
     unittest.main()
