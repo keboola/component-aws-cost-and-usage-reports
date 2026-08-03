@@ -11,6 +11,7 @@ import dateparser
 import pytz
 from botocore.exceptions import ClientError
 from keboola.component.base import ComponentBase
+from keboola.component.exceptions import UserException
 
 from duckdb_client import DuckDBClient
 
@@ -252,13 +253,21 @@ class Component(ComponentBase):
         # applied as an explicit header override in DuckDB, so source columns that differ
         # only in letter case are kept distinct instead of being collapsed.
         original_cols = [col['category'] + '/' + col['name'] for col in manifest['columns']]
-        normalized_temp = self._kbc_normalize_header(original_cols)
-        normalized_temp = self._dedupe_header(normalized_temp)
+        # Case-preserved normalized names *before* dedup — needed to detect columns that
+        # physically collide case-insensitively within this file.
+        pre_dedup = self._kbc_normalize_header(original_cols)
+        normalized_temp = self._dedupe_header(pre_dedup)
 
         # Map to canonical names from self.last_header (table columns), keeping every
         # physical column so the override matches the CSV column count and order.
         canonical_map = {c.lower(): c for c in self.last_header}
         column_names = [canonical_map.get(norm_temp.lower(), norm_temp) for norm_temp in normalized_temp]
+
+        # Positional header override is only safe if a case-colliding tag pair keeps the
+        # same physical order across billing periods. Fail loudly (rather than silently
+        # swap the two tags' data) if this period orders such a pair differently from the
+        # canonical output header.
+        self._guard_no_column_order_swap(pre_dedup, normalized_temp, column_names, manifest['period'])
         is_zip = True if manifest['reportKeys'] and manifest['reportKeys'][0].endswith('zip') else False
         if is_zip:
             logging.info("Processing zip file via local processing")
@@ -429,6 +438,50 @@ class Component(ComponentBase):
                 new_header_lower.append(c.lower())
                 new_header.append(c)
         return new_header
+
+    @staticmethod
+    def _guard_no_column_order_swap(pre_dedup_header, deduped_header, column_names, period):
+        """
+        Fail loudly instead of silently swapping data when a report orders a
+        case-colliding tag pair differently across billing periods.
+
+        The DuckDB header override (``names=[...]``) is positional: physical column *i*
+        is labelled ``column_names[i]``. That is only trustworthy when a case-colliding
+        pair (e.g. ``resourceTags/user:Team`` vs ``resourceTags/user:team``) keeps the
+        same physical order in every period, because the output header
+        (``self.last_header``) fixes one canonical name per case variant. If a period
+        lists the pair in the opposite order, the positional mapping would put one tag's
+        data under the other tag's column. We detect exactly that crossing and abort
+        before anything is written, rather than corrupt the output.
+
+        Scoped strictly to columns that physically collide case-insensitively *within*
+        this file (so ``_dedupe_header`` had to disambiguate them with a suffix).
+        Non-colliding case variants that ``_merge_case_variants`` folds across periods
+        have only a single variant per file, are never part of a within-file collision,
+        and so never trigger this guard — existing configurations are unaffected.
+        """
+        lower_counts = {}
+        for name in pre_dedup_header:
+            key = name.lower()
+            lower_counts[key] = lower_counts.get(key, 0) + 1
+        collision_bases = {key for key, count in lower_counts.items() if count > 1}
+        if not collision_bases:
+            return
+
+        for pre, deduped, canonical in zip(pre_dedup_header, deduped_header, column_names):
+            if pre.lower() not in collision_bases:
+                continue
+            # column_names[i] always equals deduped_header[i] case-insensitively, so a
+            # case-sensitive difference here means this physical column was mapped onto
+            # the OTHER case variant's canonical slot -> the pair's data would be swapped.
+            if canonical != deduped:
+                raise UserException(
+                    f"Report columns are inconsistently ordered across billing periods for a "
+                    f"case-differing tag pair (near column '{pre}' in period '{period}'). "
+                    f"Loading it by position would swap the two tags' data between columns "
+                    f"'{deduped}' and '{canonical}'. Aborting to avoid writing swapped data. "
+                    f"Please contact Keboola support so the affected report can be reprocessed."
+                )
 
     # TODO: support for datatypes
     def _create_result_table(self, report_name, max_header):

@@ -1,3 +1,13 @@
+**1.1.6**
+
+- safety: fail loudly instead of silently swapping data if a report lists a
+  case-differing tag pair (e.g. `resourceTags/user:Team` and `resourceTags/user:team`)
+  in a different physical column order across billing periods. The header override is
+  applied positionally, so an inconsistent order would put one tag's data under the
+  other tag's column; the run now aborts with a clear message before writing anything.
+  This is a defensive guard only — it has no effect on reports whose column order is
+  consistent (the normal case), so existing configurations are unaffected.
+
 **1.1.5**
 
 - fix: keep AWS CUR tag columns that differ only by letter case as separate columns
