@@ -1,5 +1,6 @@
 import csv
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -9,6 +10,9 @@ from duckdb_client import DuckDBClient
 class TestDuckDBClient(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def _write_csv(self, name, rows):
         path = os.path.join(self.tmp_dir, name)
