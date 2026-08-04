@@ -1,3 +1,26 @@
+**1.1.6**
+
+- safety: fail loudly instead of silently swapping data if a report lists a
+  case-differing tag pair (e.g. `resourceTags/user:Team` and `resourceTags/user:team`)
+  in a different physical column order across billing periods. The header override is
+  applied positionally, so an inconsistent order would put one tag's data under the
+  other tag's column; the run now aborts with a clear message before writing anything.
+  This is a defensive guard only — it has no effect on reports whose column order is
+  consistent (the normal case), so existing configurations are unaffected.
+
+**1.1.5**
+
+- fix: keep AWS CUR tag columns that differ only by letter case as separate columns
+  with their own data (SUPPORT-17124). Report files are now read with explicit,
+  case-insensitively unique column names so DuckDB's case-insensitive header handling
+  no longer collapses columns such as `resourceTags/user:Team` and
+  `resourceTags/user:team`. Files that share an identical column layout are read with a
+  single multi-file reader and only distinct layouts are combined with
+  `UNION ALL BY NAME`, preserving the original low-memory streaming behaviour.
+  Reads use `union_by_name` + `null_padding`, so a chunk with fewer columns than its
+  manifest is NULL-padded rather than aborting the export (matches the previous
+  tolerant behaviour).
+
 **0.1.1**
 
 - fix requirements
