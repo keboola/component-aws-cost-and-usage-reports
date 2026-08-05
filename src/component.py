@@ -70,6 +70,7 @@ class Component(ComponentBase):
         # Which output column each case-differing source column owns. Absent from state
         # written by earlier versions, in which case it is recovered from the header.
         self.column_slots = self.last_state.get('report_column_slots', {})
+        self.run_source_names = set()
 
     def run(self):
         '''
@@ -369,6 +370,13 @@ class Component(ComponentBase):
         if not manifests:
             return self.last_header
 
+        # Every source column name in this run, needed to tell a disambiguating '_<n>' suffix
+        # apart from a tag whose own name ends in '_<n>'. Collected across all manifests so
+        # every file is resolved against the same evidence.
+        self.run_source_names = {name.lower()
+                                 for m in manifests
+                                 for name in self._get_manifest_source_columns(m)}
+
         for m in manifests:
             # Each report file's column names are resolved exactly once, here, and kept on
             # the manifest for the loading step. Resolving twice risks the output header and
@@ -543,13 +551,18 @@ class Component(ComponentBase):
                 candidates.setdefault(base.lower(), set()).add(base)
 
         for base, entries in suffixed.items():
-            if len(candidates[base.lower()]) > 1:
-                # Another spelling of this name is in the header, so the suffix really is a
-                # disambiguator and these columns belong to `base`.
-                registry.setdefault(base, [name for _, name in sorted(entries)])
-            else:
-                # Nothing to disambiguate against: take the names at face value.
-                for _, name in entries:
+            # A suffixed name is only a disambiguated variant if another spelling of its base
+            # is in the header AND the report has no column of that exact name — a tag whose
+            # own name ends in '_<n>' sanitizes to the very same shape, and a real column
+            # always outranks a guess.
+            slots = [entry for entry in entries if entry[1].lower() not in self.run_source_names]
+            recovered = set()
+            if slots and len(candidates[base.lower()]) > 1:
+                registry.setdefault(base, [name for _, name in sorted(slots)])
+                recovered = {name for _, name in slots}
+            # Anything not read as a slot is taken at face value.
+            for _, name in entries:
+                if name not in recovered:
                     registry.setdefault(name, [name])
 
         spellings = {}

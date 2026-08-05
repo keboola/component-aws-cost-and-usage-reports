@@ -40,6 +40,7 @@ class ColumnResolutionTestCase(unittest.TestCase):
         comp = Component.__new__(Component)
         comp.last_header = list(state_header) if state_header else []
         comp.column_slots = {source: list(names) for source, names in (column_slots or {}).items()}
+        comp.run_source_names = set()
         return comp
 
     @staticmethod
@@ -118,9 +119,10 @@ class TestCaseVariantColumnIdentity(ColumnResolutionTestCase):
         for names in resolved:
             self.assertEqual(names, header)
 
-    def test_manifest_iteration_order_does_not_change_resolution(self):
+    def test_manifest_order_does_not_matter_when_every_period_has_both_variants(self):
         """Every period carries both variants, so the outcome must not depend on the order
-        S3 happens to list the manifests in."""
+        S3 happens to list the manifests in. (Which spelling wins the shared column when the
+        periods carry only ONE variant each is order-dependent, as it has always been.)"""
         pair = [("resourceTags", "user:Team"), ("resourceTags", "user:team")]
         period_a = self._manifest("20260301-20260401", [("identity", "LineItemId")] + pair)
         period_b = self._manifest("20260401-20260501", [("identity", "LineItemId")] + pair[::-1])
@@ -244,6 +246,39 @@ class TestCaseVariantColumnIdentity(ColumnResolutionTestCase):
         self.assertEqual(resolved[0], "resourceTags__user_tier_2")
         self.assertEqual(resolved[2], "resourceTags__user_TIER")
         self.assertEqual(len({name.lower() for name in resolved}), len(resolved))
+
+    def test_a_real_tag_named_like_a_suffix_keeps_its_own_column(self):
+        """A configuration whose report has BOTH a case-colliding pair and an ordinary tag
+        that sanitizes to `<base>_<n>` (e.g. `user:tier-1`). The ordinary tag's column must
+        not be mistaken for the disambiguated form of `user:tier` and handed its data."""
+        state = ["identity__LineItemId", "resourceTags__user_Tier", "resourceTags__user_tier_1"]
+        comp = self._component(state)
+        manifest = self._manifest("20260101-20260201", [("identity", "LineItemId"),
+                                                        ("resourceTags", "user:tier"),
+                                                        ("resourceTags", "user:tier-1")])
+
+        header, (resolved,) = self._resolve(comp, [manifest])
+
+        self.assertEqual(resolved[2], "resourceTags__user_tier_1")
+        self.assertNotEqual(resolved[1], "resourceTags__user_tier_1")
+        self.assertEqual(header, sorted(state))
+
+    def test_repeated_runs_do_not_grow_the_output_header(self):
+        """Running the same report again must not invent another column each time."""
+        state = ["identity__LineItemId", "resourceTags__user_Tier", "resourceTags__user_tier_1"]
+        columns = [("identity", "LineItemId"),
+                   ("resourceTags", "user:tier"),
+                   ("resourceTags", "user:tier-1")]
+
+        header, slots = sorted(state), {}
+        headers = []
+        for _ in range(4):
+            comp = self._component(header, slots)
+            header, _ = self._resolve(comp, [self._manifest("20260101-20260201", columns)])
+            slots = comp.column_slots
+            headers.append(list(header))
+
+        self.assertEqual(headers[0], headers[-1], f"output columns grow every run: {headers}")
 
     def test_resolution_is_stable_across_runs(self):
         """The second run starts from the state the first one wrote and must resolve every
@@ -374,11 +409,16 @@ class TestCaseVariantColumnData(ColumnResolutionTestCase):
             ["identity/LineItemId", "resourceTags/user:Team", "resourceTags/user:TEAM"],
             ["liB", "value-b", "value-upper"]])
 
-        _, rows = self._export(comp, [period_a, period_b], [chunk_a, chunk_b])
+        header, resolved = self._resolve(comp, [period_a, period_b])
+        _, rows = self._export(self._component(["resourceTags__user_Team"]),
+                               [period_a, period_b], [chunk_a, chunk_b])
 
-        self.assertIn("value-a", rows["liA"].values())
-        self.assertIn("value-b", rows["liB"].values())
-        self.assertIn("value-upper", rows["liB"].values())
+        # Each value must sit in the column its own period was resolved to, not merely
+        # "somewhere in the row".
+        self.assertEqual(rows["liA"][resolved[0][1]], "value-a")
+        self.assertEqual(rows["liB"][resolved[1][1]], "value-b")
+        self.assertEqual(rows["liB"][resolved[1][2]], "value-upper")
+        self.assertEqual(len(header), len(set(header)))
 
 
 class TestDateParsing(unittest.TestCase):
