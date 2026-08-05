@@ -8,6 +8,9 @@
   report that starts carrying a second case variant of a tag now simply gets an additional
   column. Column names already recorded in the configuration state are reused unchanged,
   so existing output tables keep the columns they have.
+- Which case variant owns which output column is now recorded in the state file under
+  `report_column_slots`. The key is additive: state written by earlier versions is read as
+  before, and the mapping is recovered from the stored header for those configurations.
 - The 1.1.6 safety guard is superseded and removed. With name-based matching there is no
   positional swap left to protect against, so the abort — and its "contact Keboola
   support so the affected report can be reprocessed" instruction, which pointed at no

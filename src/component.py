@@ -67,6 +67,9 @@ class Component(ComponentBase):
         self.last_state = self.get_state_file()
         self.last_report_id = self.last_state.get('last_report_id')
         self.last_header = self.last_state.get('report_header', [])
+        # Which output column each case-differing source column owns. Absent from state
+        # written by earlier versions, in which case it is recovered from the header.
+        self.column_slots = self.last_state.get('report_column_slots', {})
 
     def run(self):
         '''
@@ -157,7 +160,8 @@ class Component(ComponentBase):
             self._write_table_manifest(output_table, report_name)
             self.write_state_file({"last_file_timestamp": since_timestamp.isoformat(),
                                    "last_report_id": latest_report_id,
-                                   "report_header": self.last_header})
+                                   "report_header": self.last_header,
+                                   "report_column_slots": self.column_slots})
 
             logging.info(
                 f"Extraction finished at {datetime.now().isoformat()}.")
@@ -253,15 +257,14 @@ class Component(ComponentBase):
         logging.info(
             f"Loading report ID {manifest['assemblyId']} for period {manifest['period']}"
             f" in {len(manifest['reportKeys'])} report chunks.")
-        # Build the full, physically-ordered list of output column names for the file.
-        # The names are resolved by case-preserved identity rather than by physical
-        # position, so a period that lists a case-colliding tag pair in a different order
-        # than another period still maps each tag onto its own column. They are applied as
-        # an explicit header override in DuckDB, so source columns that differ only in
-        # letter case are kept distinct instead of being collapsed.
-        original_cols = [col['category'] + '/' + col['name'] for col in manifest['columns']]
-        column_names = self._resolve_column_names(self._kbc_normalize_header(original_cols))
-        self._assert_names_loadable(column_names, manifest['period'])
+        # The physically-ordered output column names for this file, resolved by
+        # case-preserved identity rather than by physical position when _get_max_header_
+        # normalized built the output header. Reusing that single resolution is what
+        # guarantees the names below are the ones the output header was built from. They are
+        # applied as an explicit header override in DuckDB, so source columns that differ
+        # only in letter case are kept distinct instead of being collapsed.
+        column_names = manifest['resolved_columns']
+        self._assert_names_loadable(column_names, self.last_header, manifest['period'])
 
         is_zip = True if manifest['reportKeys'] and manifest['reportKeys'][0].endswith('zip') else False
         if is_zip:
@@ -367,8 +370,12 @@ class Component(ComponentBase):
             return self.last_header
 
         for m in manifests:
-            # normalize
-            norm_cols = set(self._get_manifest_normalized_columns(m))
+            # Each report file's column names are resolved exactly once, here, and kept on
+            # the manifest for the loading step. Resolving twice risks the output header and
+            # a file's header override disagreeing, which would silently drop that file's
+            # data for the columns they disagree on.
+            m['resolved_columns'] = self._resolve_column_names(self._get_manifest_source_columns(m))
+            norm_cols = set(m['resolved_columns'])
             if not norm_cols.issubset(set(self.last_header)):
                 norm_cols.update(set(self.last_header))
                 self.last_header = list(norm_cols)
@@ -399,13 +406,11 @@ class Component(ComponentBase):
 
         return result
 
-    def _get_manifest_normalized_columns(self, manifest):
+    def _get_manifest_source_columns(self, manifest):
         # normalize
         man_cols = [col['category'] + '/' + col['name']
                     for col in manifest['columns']]
-        # Resolved against self.last_header, so the output header uses the same names the
-        # per-file header override will use when the report chunks are loaded.
-        return self._resolve_column_names(self._kbc_normalize_header(man_cols))
+        return self._kbc_normalize_header(man_cols)
 
     def _kbc_normalize_header(self, header):
         normalized = []
@@ -428,88 +433,139 @@ class Component(ComponentBase):
         positional, resolving by identity is what keeps each tag's data under its own
         column whichever order a period happens to use.
 
-        Names already present in ``self.last_header`` (the output header carried in state)
-        are reused verbatim, so existing configurations keep their column names: a suffixed
-        name such as ``resourceTags__user_team_1`` records that the variant spelled
-        ``resourceTags__user_team`` owns that column. A case variant that is new to the
-        report is given an additional column — nothing is ever renamed.
+        Which output column a case variant owns is remembered in the state file
+        (``report_column_slots``), so existing configurations keep the columns they already
+        have and a variant that is new to the report is given an *additional* column —
+        nothing is ever renamed. For configurations whose state predates that mapping, it is
+        recovered from the output header where possible; see ``_build_slot_registry``.
 
         The result is case-insensitively unique by construction, which is what DuckDB
         requires of a ``names=[...]`` override.
         """
-        # Fold any case-ambiguous entries first: a header carried over from an older
-        # version may hold two bare variants ("..._Team" and "..._team"), which cannot
-        # both exist as DuckDB columns. This is the same folding _get_max_header_normalized
-        # applies to the final header, so it is idempotent here.
+        # Fold any case-ambiguous entries first: a header carried over from an older version
+        # may hold two bare variants ("..._Team" and "..._team"), which cannot both exist as
+        # DuckDB columns. This is the same folding _get_max_header_normalized applies to the
+        # final header, so it is idempotent here.
         known = self._merge_case_variants(self.last_header)
-        registry, known_collisions = self._build_variant_registry(known)
+        registry, collision_bases = self._build_slot_registry(known)
         canonical_map = {name.lower(): name for name in known}
         taken_lower = {name.lower() for name in known}
+        for names in self.column_slots.values():
+            taken_lower.update(name.lower() for name in names)
 
         positions_by_name = {}
         for position, name in enumerate(source_header):
             positions_by_name.setdefault(name.lower(), []).append(position)
 
+        # A disambiguating suffix must not collide with a column this file actually has: the
+        # report may well contain a tag whose own name ends in '_<n>'.
+        reserved_lower = set(positions_by_name)
         resolved = [None] * len(source_header)
-        # Both the groups and the variants within a group are walked in sorted order, so
-        # the outcome depends only on *which* columns the file has, never on their order.
+        claimed_lower = set()
+        # Both the groups and the variants within a group are walked in sorted order, so the
+        # outcome depends only on *which* columns the file has, never on their order.
         for lower_name in sorted(positions_by_name):
             positions = positions_by_name[lower_name]
-            if len(positions) == 1 and lower_name not in known_collisions:
-                # A single physical column with no known case variants: keep folding it
+            collides_in_file = len(positions) > 1
+            if not collides_in_file and lower_name not in collision_bases:
+                # A single physical column with no case variants on record: keep folding it
                 # onto the canonical spelling, so a tag whose letter case merely drifts
                 # between periods stays in one column (unchanged behaviour).
                 source_name = source_header[positions[0]]
                 name = canonical_map.get(lower_name)
-                if name is None:
-                    name = self._next_free_name(source_name, taken_lower)
+                if name is None or name.lower() in claimed_lower:
+                    name = self._next_free_name(source_name, taken_lower, reserved_lower)
                 resolved[positions[0]] = name
                 taken_lower.add(name.lower())
+                claimed_lower.add(name.lower())
                 continue
 
             variants = {}
             for position in positions:
                 variants.setdefault(source_header[position], []).append(position)
             for variant in sorted(variants):
-                owned = list(registry.get(variant, []))
+                owned = [name for name in registry.get(variant, []) if name.lower() not in claimed_lower]
+                assigned = []
                 for position in variants[variant]:
-                    # Columns with an identical name *and* case are indistinguishable and
-                    # can only be told apart by position; everything else goes by identity.
-                    name = owned.pop(0) if owned else self._next_free_name(variant, taken_lower)
+                    if owned:
+                        # Columns with an identical name *and* case are indistinguishable, so
+                        # their own slots are handed out in physical order; every other column
+                        # is matched by identity.
+                        name = owned.pop(0)
+                    elif collides_in_file:
+                        name = self._next_free_name(variant, taken_lower, reserved_lower)
+                    else:
+                        # This spelling owns no column of its own, so keep the canonical one
+                        # rather than inventing a column the output header does not have.
+                        name = canonical_map.get(lower_name, variant)
                     resolved[position] = name
                     taken_lower.add(name.lower())
+                    claimed_lower.add(name.lower())
+                    assigned.append(name)
+                if collides_in_file or variant in registry:
+                    # Only genuine case-collision participants are recorded; a fold is
+                    # re-derived from the canonical spelling on every run.
+                    self.column_slots[variant] = assigned
 
         return resolved
 
-    @classmethod
-    def _build_variant_registry(cls, known_header):
+    def _build_slot_registry(self, known_header):
         """
-        Read back which case variant owns which output column.
+        Work out which case variant owns which output column.
 
-        Returns ``(registry, collisions)`` where ``registry`` maps a case-preserved source
-        name to the output columns assigned to it (ordered by dedup index) and
-        ``collisions`` holds the lower-cased source names known to have more than one
-        variant. A base recorded with several variants means later files must resolve that
-        name by identity even when they carry only one of the variants.
+        Returns ``(registry, collision_bases)``: ``registry`` maps a case-preserved source
+        name to the output columns it owns, and ``collision_bases`` holds the lower-cased
+        names with more than one spelling on record — those must be resolved by identity even
+        in a file that carries only one of the spellings.
+
+        The mapping persisted in state is authoritative. For a configuration whose state
+        predates it, as much as possible is recovered from the output header: an unsuffixed
+        name unambiguously belongs to the source column spelled the same way, while a
+        ``_<n>`` suffix is only read as a disambiguated variant when the header really does
+        hold another spelling of that name differing in letter case. Otherwise the suffix is
+        indistinguishable from a source column whose own name ends in ``_<n>``, and the name
+        is taken at face value.
         """
-        registry = {}
-        variants_per_base = {}
+        known = set(known_header)
+        registry = {source: [name for name in names if name in known]
+                    for source, names in self.column_slots.items()}
+        registry = {source: names for source, names in registry.items() if names}
+
+        suffixed = {}
+        candidates = {}
         for name in known_header:
-            base, index = cls._split_dedupe_suffix(name)
-            registry.setdefault(base, []).append((index, name))
-            variants_per_base.setdefault(base.lower(), set()).add(name)
+            base, index = self._split_dedupe_suffix(name)
+            if index == 0:
+                registry.setdefault(name, [name])
+                candidates.setdefault(name.lower(), set()).add(name)
+            else:
+                suffixed.setdefault(base, []).append((index, name))
+                candidates.setdefault(base.lower(), set()).add(base)
 
-        registry = {base: [name for _, name in sorted(entries)] for base, entries in registry.items()}
-        collisions = {base for base, names in variants_per_base.items() if len(names) > 1}
-        return registry, collisions
+        for base, entries in suffixed.items():
+            if len(candidates[base.lower()]) > 1:
+                # Another spelling of this name is in the header, so the suffix really is a
+                # disambiguator and these columns belong to `base`.
+                registry.setdefault(base, [name for _, name in sorted(entries)])
+            else:
+                # Nothing to disambiguate against: take the names at face value.
+                for _, name in entries:
+                    registry.setdefault(name, [name])
+
+        spellings = {}
+        for source in registry:
+            spellings.setdefault(source.lower(), set()).add(source)
+        collision_bases = {lower for lower, sources in spellings.items() if len(sources) > 1}
+        return registry, collision_bases
 
     @staticmethod
     def _split_dedupe_suffix(name):
         """
-        Split an output column name into its case-preserved source name and dedup index.
+        Split an output column name into a possible source name and dedup index.
 
-        Disambiguated names are built as ``<source name>_<index>``, so the base of an
-        already-assigned name tells us which case variant owns that column.
+        Disambiguated names are built as ``<source name>_<index>``. Whether a given name was
+        actually built that way cannot be told from the name alone — see
+        ``_build_slot_registry`` for how the ambiguity is resolved.
         """
         match = DEDUPE_SUFFIX_PATTERN.match(name)
         if match:
@@ -517,31 +573,46 @@ class Component(ComponentBase):
         return name, 0
 
     @staticmethod
-    def _next_free_name(base, taken_lower):
-        """Return ``base``, or ``base_<n>`` with the lowest n that is not taken yet."""
+    def _next_free_name(base, taken_lower, reserved_lower=frozenset()):
+        """
+        Return ``base``, or ``base_<n>`` with the lowest n that is still free.
+
+        A disambiguated name has to avoid the columns already assigned (``taken_lower``) and
+        the source column names of the file being resolved (``reserved_lower``), so that a
+        generated suffix never steals the name of a real column.
+        """
         if base.lower() not in taken_lower:
             return base
         index = 1
-        while f"{base}_{index}".lower() in taken_lower:
+        while f"{base}_{index}".lower() in taken_lower | reserved_lower:
             index += 1
         return f"{base}_{index}"
 
     @staticmethod
-    def _assert_names_loadable(column_names, period):
+    def _assert_names_loadable(column_names, header, period):
         """
-        Internal invariant: a header override must be case-insensitively unique.
+        Internal invariants for a file's header override, both guaranteed by construction:
 
-        DuckDB resolves identifiers case-insensitively and rejects a ``names=[...]``
-        override holding two names that differ only in letter case.
-        ``_resolve_column_names`` guarantees uniqueness by construction, so this is a
-        tripwire against a future regression — not a state a configuration can reach.
+        - it must be case-insensitively unique, because DuckDB resolves identifiers
+          case-insensitively and rejects a ``names=[...]`` override holding two names that
+          differ only in letter case;
+        - every name must exist in the output header, because the export projects the header
+          and would otherwise drop that column's data without any error.
+
+        These are tripwires against a future regression — not states a configuration can
+        reach — so they raise an internal error rather than a UserException.
         """
         seen = set()
+        known = set(header)
         for name in column_names:
             if name.lower() in seen:
                 raise RuntimeError(
                     f"Internal error: resolved a duplicate output column '{name}' for period "
                     f"'{period}'. This is a bug in the column name resolution.")
+            if name not in known:
+                raise RuntimeError(
+                    f"Internal error: resolved column '{name}' for period '{period}' is missing "
+                    f"from the output header. This is a bug in the column name resolution.")
             seen.add(name.lower())
 
     # TODO: support for datatypes
