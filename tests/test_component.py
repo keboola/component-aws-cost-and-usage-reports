@@ -40,7 +40,7 @@ class ColumnResolutionTestCase(unittest.TestCase):
         comp = Component.__new__(Component)
         comp.last_header = list(state_header) if state_header else []
         comp.column_slots = {source: list(names) for source, names in (column_slots or {}).items()}
-        comp.run_source_names = set()
+        comp.run_collision_bases = set()
         return comp
 
     @staticmethod
@@ -149,15 +149,27 @@ class TestCaseVariantColumnIdentity(ColumnResolutionTestCase):
                 self.assertEqual(header, state)
                 self.assertCountEqual(resolved, state)
 
-    def test_legacy_header_recovers_which_variant_owns_which_column(self):
-        """State written before the mapping was persisted: a period carrying only ONE of the
-        two variants must still resolve to that variant's own column."""
-        comp = self._component(["resourceTags__user_Team", "resourceTags__user_team_1"])
-        manifest = self._manifest("20260101-20260201", [("resourceTags", "user:team")])
+    def test_legacy_header_recovers_a_slot_only_on_collision_evidence(self):
+        """For state written before the mapping was persisted, a `_<n>` name is read as a
+        disambiguated variant only when a report file of the run really does spell that name
+        more than once -- the only way such a suffix is ever produced. Without that evidence
+        the name could equally be an ordinary tag, so nothing is inferred."""
+        state = ["resourceTags__user_Team", "resourceTags__user_team_1"]
 
-        _, (resolved,) = self._resolve(comp, [manifest])
+        # The report carries both variants, so `..._team_1` is its disambiguated column and
+        # the existing columns are preserved exactly.
+        with_collision = self._manifest("20260101-20260201", [("resourceTags", "user:Team"),
+                                                              ("resourceTags", "user:team")])
+        header, (resolved,) = self._resolve(self._component(state), [with_collision])
+        self.assertEqual(resolved, ["resourceTags__user_Team", "resourceTags__user_team_1"])
+        self.assertEqual(header, state)
 
-        self.assertEqual(resolved, ["resourceTags__user_team_1"])
+        # Only one spelling in the report: fall back to the canonical column rather than
+        # assuming `..._team_1` is a variant of it.
+        without_collision = self._manifest("20260101-20260201", [("resourceTags", "user:team")])
+        header, (resolved,) = self._resolve(self._component(state), [without_collision])
+        self.assertEqual(resolved, ["resourceTags__user_Team"])
+        self.assertEqual(header, state)
 
     def test_recorded_slots_survive_a_period_dropping_a_variant(self):
         """Same, driven by the mapping persisted in state rather than recovered."""
@@ -263,22 +275,64 @@ class TestCaseVariantColumnIdentity(ColumnResolutionTestCase):
         self.assertNotEqual(resolved[1], "resourceTags__user_tier_1")
         self.assertEqual(header, sorted(state))
 
-    def test_repeated_runs_do_not_grow_the_output_header(self):
-        """Running the same report again must not invent another column each time."""
+    def test_a_period_omitting_a_tag_does_not_repurpose_its_column(self):
+        """AWS omits a tag column for a period in which no resource carries that tag. The
+        absent `user:tier-1` column must not make `user:tier` inherit its slot."""
         state = ["identity__LineItemId", "resourceTags__user_Tier", "resourceTags__user_tier_1"]
-        columns = [("identity", "LineItemId"),
-                   ("resourceTags", "user:tier"),
-                   ("resourceTags", "user:tier-1")]
+        comp = self._component(state)
+        manifest = self._manifest("20260101-20260201", [("identity", "LineItemId"),
+                                                        ("resourceTags", "user:tier")])
+
+        header, (resolved,) = self._resolve(comp, [manifest])
+
+        # `user:tier` folds onto the existing `user:Tier` column, as it always has ...
+        self.assertEqual(resolved[1], "resourceTags__user_Tier")
+        # ... and the absent tag's column is left alone.
+        self.assertEqual(header, sorted(state))
+
+    def test_repeated_runs_do_not_grow_the_output_header(self):
+        """Running the report again must not invent another column each time -- including when
+        one run's periods happen not to carry every tag."""
+        state = ["identity__LineItemId", "resourceTags__user_Tier", "resourceTags__user_tier_1"]
+        full = [("identity", "LineItemId"),
+                ("resourceTags", "user:tier"),
+                ("resourceTags", "user:tier-1")]
+        # The middle run's period is missing the `user:tier-1` tag entirely.
+        partial = [("identity", "LineItemId"), ("resourceTags", "user:tier")]
 
         header, slots = sorted(state), {}
         headers = []
-        for _ in range(4):
+        for columns in (full, partial, full, full, partial, full):
             comp = self._component(header, slots)
             header, _ = self._resolve(comp, [self._manifest("20260101-20260201", columns)])
             slots = comp.column_slots
             headers.append(list(header))
 
+        self.assertEqual(headers[0], sorted(state))
         self.assertEqual(headers[0], headers[-1], f"output columns grow every run: {headers}")
+        self.assertTrue(all(len(h) == len(headers[0]) for h in headers),
+                        f"output column count is not stable: {[len(h) for h in headers]}")
+
+    def test_a_displaced_tag_keeps_the_column_it_was_given(self):
+        """When a case collision takes the column an ordinary `<base>_<n>` tag would have had,
+        that tag is moved once and then stays put -- its new column is recorded like any
+        other, rather than being invented again on the next run."""
+        state = ["resourceTags__user_Tier", "resourceTags__user_tier_1", "resourceTags__user_TIER"]
+        columns = [("resourceTags", "user:tier"),
+                   ("resourceTags", "user:Tier"),
+                   ("resourceTags", "user:tier-1")]
+
+        header, slots = sorted(state), {}
+        runs = []
+        for _ in range(5):
+            comp = self._component(header, slots)
+            header, (resolved,) = self._resolve(comp, [self._manifest("20260101-20260201", columns)])
+            slots = comp.column_slots
+            runs.append((list(header), list(resolved)))
+
+        self.assertEqual(runs[1], runs[-1], f"resolution never settles: {runs}")
+        # Every tag keeps a column of its own.
+        self.assertEqual(len(set(runs[-1][1])), 3)
 
     def test_resolution_is_stable_across_runs(self):
         """The second run starts from the state the first one wrote and must resolve every

@@ -70,7 +70,7 @@ class Component(ComponentBase):
         # Which output column each case-differing source column owns. Absent from state
         # written by earlier versions, in which case it is recovered from the header.
         self.column_slots = self.last_state.get('report_column_slots', {})
-        self.run_source_names = set()
+        self.run_collision_bases = set()
 
     def run(self):
         '''
@@ -370,12 +370,17 @@ class Component(ComponentBase):
         if not manifests:
             return self.last_header
 
-        # Every source column name in this run, needed to tell a disambiguating '_<n>' suffix
-        # apart from a tag whose own name ends in '_<n>'. Collected across all manifests so
-        # every file is resolved against the same evidence.
-        self.run_source_names = {name.lower()
-                                 for m in manifests
-                                 for name in self._get_manifest_source_columns(m)}
+        # Column names that a single report file of this run spells more than once. Only such
+        # a collision can have produced a '_<n>' disambiguating suffix, so this is the
+        # evidence for reading one back out of a header written by an earlier version — a
+        # suffix-shaped name is otherwise just a tag whose own name ends in '_<n>'. Collected
+        # across all manifests so every file is resolved against the same evidence.
+        self.run_collision_bases = set()
+        for m in manifests:
+            counts = {}
+            for name in self._get_manifest_source_columns(m):
+                counts[name.lower()] = counts.get(name.lower(), 0) + 1
+            self.run_collision_bases.update(lower for lower, count in counts.items() if count > 1)
 
         for m in manifests:
             # Each report file's column names are resolved exactly once, here, and kept on
@@ -441,11 +446,12 @@ class Component(ComponentBase):
         positional, resolving by identity is what keeps each tag's data under its own
         column whichever order a period happens to use.
 
-        Which output column a case variant owns is remembered in the state file
+        Which output column each source column owns is remembered in the state file
         (``report_column_slots``), so existing configurations keep the columns they already
         have and a variant that is new to the report is given an *additional* column —
-        nothing is ever renamed. For configurations whose state predates that mapping, it is
-        recovered from the output header where possible; see ``_build_slot_registry``.
+        nothing is ever renamed, and no name has to be inferred twice. For configurations
+        whose state predates that mapping, as much as possible is read back out of the output
+        header; see ``_build_slot_registry``.
 
         The result is case-insensitively unique by construction, which is what DuckDB
         requires of a ``names=[...]`` override.
@@ -455,7 +461,7 @@ class Component(ComponentBase):
         # DuckDB columns. This is the same folding _get_max_header_normalized applies to the
         # final header, so it is idempotent here.
         known = self._merge_case_variants(self.last_header)
-        registry, collision_bases = self._build_slot_registry(known)
+        registry = self._build_slot_registry(known)
         canonical_map = {name.lower(): name for name in known}
         taken_lower = {name.lower() for name in known}
         for names in self.column_slots.values():
@@ -475,18 +481,6 @@ class Component(ComponentBase):
         for lower_name in sorted(positions_by_name):
             positions = positions_by_name[lower_name]
             collides_in_file = len(positions) > 1
-            if not collides_in_file and lower_name not in collision_bases:
-                # A single physical column with no case variants on record: keep folding it
-                # onto the canonical spelling, so a tag whose letter case merely drifts
-                # between periods stays in one column (unchanged behaviour).
-                source_name = source_header[positions[0]]
-                name = canonical_map.get(lower_name)
-                if name is None or name.lower() in claimed_lower:
-                    name = self._next_free_name(source_name, taken_lower, reserved_lower)
-                resolved[positions[0]] = name
-                taken_lower.add(name.lower())
-                claimed_lower.add(name.lower())
-                continue
 
             variants = {}
             for position in positions:
@@ -496,24 +490,25 @@ class Component(ComponentBase):
                 assigned = []
                 for position in variants[variant]:
                     if owned:
-                        # Columns with an identical name *and* case are indistinguishable, so
-                        # their own slots are handed out in physical order; every other column
-                        # is matched by identity.
+                        # The column this spelling owns. Spellings that are identical in case
+                        # too are indistinguishable, so their slots go out in physical order.
                         name = owned.pop(0)
                     elif collides_in_file:
+                        # A spelling new to a name this file uses more than once needs a
+                        # column of its own, or the two tags' data would be merged.
                         name = self._next_free_name(variant, taken_lower, reserved_lower)
                     else:
-                        # This spelling owns no column of its own, so keep the canonical one
-                        # rather than inventing a column the output header does not have.
-                        name = canonical_map.get(lower_name, variant)
+                        # The only spelling of this name in the file and no column on record:
+                        # fold onto the canonical spelling, so a tag whose letter case merely
+                        # drifts between periods stays in one column (unchanged behaviour).
+                        name = canonical_map.get(lower_name)
+                        if name is None or name.lower() in claimed_lower:
+                            name = self._next_free_name(variant, taken_lower, reserved_lower)
                     resolved[position] = name
                     taken_lower.add(name.lower())
                     claimed_lower.add(name.lower())
                     assigned.append(name)
-                if collides_in_file or variant in registry:
-                    # Only genuine case-collision participants are recorded; a fold is
-                    # re-derived from the canonical spelling on every run.
-                    self.column_slots[variant] = assigned
+                self.column_slots[variant] = assigned
 
         return resolved
 
@@ -521,18 +516,15 @@ class Component(ComponentBase):
         """
         Work out which case variant owns which output column.
 
-        Returns ``(registry, collision_bases)``: ``registry`` maps a case-preserved source
-        name to the output columns it owns, and ``collision_bases`` holds the lower-cased
-        names with more than one spelling on record — those must be resolved by identity even
-        in a file that carries only one of the spellings.
+        Maps a case-preserved source column name to the output column(s) it owns.
 
         The mapping persisted in state is authoritative. For a configuration whose state
-        predates it, as much as possible is recovered from the output header: an unsuffixed
-        name unambiguously belongs to the source column spelled the same way, while a
-        ``_<n>`` suffix is only read as a disambiguated variant when the header really does
-        hold another spelling of that name differing in letter case. Otherwise the suffix is
-        indistinguishable from a source column whose own name ends in ``_<n>``, and the name
-        is taken at face value.
+        predates it, as much as possible is read back out of the output header: an unsuffixed
+        name unambiguously belongs to the source column spelled the same way, while a ``_<n>``
+        suffix is only read as a disambiguated variant when a report file of this run really
+        does use that name more than once — the only thing that can produce such a suffix.
+        Without that evidence the name is indistinguishable from a tag whose own name ends in
+        ``_<n>``, so it is taken at face value rather than guessed at.
         """
         known = set(known_header)
         registry = {source: [name for name in names if name in known]
@@ -540,36 +532,26 @@ class Component(ComponentBase):
         registry = {source: names for source, names in registry.items() if names}
 
         suffixed = {}
-        candidates = {}
         for name in known_header:
             base, index = self._split_dedupe_suffix(name)
             if index == 0:
+                # An unsuffixed name belongs to the column spelled exactly the same way; a
+                # suffix is only ever appended, never removed, so this is not a guess.
                 registry.setdefault(name, [name])
-                candidates.setdefault(name.lower(), set()).add(name)
             else:
                 suffixed.setdefault(base, []).append((index, name))
-                candidates.setdefault(base.lower(), set()).add(base)
 
         for base, entries in suffixed.items():
-            # A suffixed name is only a disambiguated variant if another spelling of its base
-            # is in the header AND the report has no column of that exact name — a tag whose
-            # own name ends in '_<n>' sanitizes to the very same shape, and a real column
-            # always outranks a guess.
-            slots = [entry for entry in entries if entry[1].lower() not in self.run_source_names]
-            recovered = set()
-            if slots and len(candidates[base.lower()]) > 1:
-                registry.setdefault(base, [name for _, name in sorted(slots)])
-                recovered = {name for _, name in slots}
-            # Anything not read as a slot is taken at face value.
-            for _, name in entries:
-                if name not in recovered:
+            if base.lower() in self.run_collision_bases:
+                # A report file of this run really does spell this name more than once, which
+                # is the only way a suffix gets appended, so read these as its variants.
+                registry.setdefault(base, [name for _, name in sorted(entries)])
+            else:
+                # No collision to disambiguate: take the names at face value.
+                for _, name in entries:
                     registry.setdefault(name, [name])
 
-        spellings = {}
-        for source in registry:
-            spellings.setdefault(source.lower(), set()).add(source)
-        collision_bases = {lower for lower, sources in spellings.items() if len(sources) > 1}
-        return registry, collision_bases
+        return registry
 
     @staticmethod
     def _split_dedupe_suffix(name):
