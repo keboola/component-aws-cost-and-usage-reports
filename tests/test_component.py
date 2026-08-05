@@ -3,7 +3,10 @@ Created on 12. 11. 2018
 
 @author: esner
 '''
+import csv
 import os
+import shutil
+import tempfile
 import unittest
 import warnings
 from datetime import datetime
@@ -13,6 +16,7 @@ import mock
 from freezegun import freeze_time
 
 from component import Component
+from duckdb_client import DuckDBClient
 
 
 class TestComponent(unittest.TestCase):
@@ -79,10 +83,11 @@ class TestCaseDifferingColumns(unittest.TestCase):
         the whole run. It now loads.
 
         Accepted trade-off: the header override stays positional, so for a report that
-        genuinely reorders such a pair the two tags' values are swapped for the reordered
-        period. That is the behaviour of every release before 1.2.1, and it is preferred over
-        an abort that also fires on reports which are NOT reordered and which leaves the
-        configuration permanently failing with no way for support to act."""
+        genuinely reorders such a pair the two tags' values are exchanged for the reordered
+        period. Releases before 1.2.1 mishandled this input too, and worse -- they collapsed
+        the pair and lost one tag's values outright. An abort is preferred to neither, since
+        it also fires on reports which are NOT reordered and leaves the configuration
+        permanently failing with no action available to support."""
         comp = self._component()
         pair = [("resourceTags", "user:Team"), ("resourceTags", "user:team")]
         period_a = self._manifest("20260301-20260401", [("identity", "LineItemId")] + pair)
@@ -125,6 +130,103 @@ class TestCaseDifferingColumns(unittest.TestCase):
         self.assertEqual(header, ["identity__LineItemId", "resourceTags__user_Owner"])
         for names in resolved:
             self.assertEqual(names, header)
+
+
+class TestReportLoadingEndToEnd(unittest.TestCase):
+    """Drives the real _load_report_chunks_to_duckdb and a real DuckDBClient, so the suite
+    fails if an aborting guard is reintroduced on this path. The tests above exercise the
+    header helpers only, which cannot detect that."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _write_csv(self, name, rows):
+        path = os.path.join(self.tmp_dir, name)
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows(rows)
+        return path
+
+    def _load(self, state_header, periods):
+        """periods: (period, [(category, name), ...], [data rows]) tuples in run order.
+
+        Report chunks are served from local files by stubbing the S3 download, which is the
+        only thing standing between this and a real run.
+        """
+        comp = Component.__new__(Component)
+        comp.last_header = list(state_header)
+        comp.bucket = "test-bucket"
+        comp.duckdb_client = DuckDBClient()
+
+        manifests, chunks = [], {}
+        for period, columns, rows in periods:
+            chunks[period] = self._write_csv(
+                f"{period}.csv", [[c + "/" + n for c, n in columns]] + rows)
+            manifests.append({
+                "period": period,
+                "assemblyId": f"assembly-{period}",
+                "report_folder": f"reports/{period}",
+                "reportKeys": [f"reports/{period}/chunk.zip"],
+                "columns": [{"category": c, "name": n} for c, n in columns],
+            })
+        comp._download_and_unzip = lambda key, local_path: chunks[key.split("/")[-2]]
+
+        max_header = comp._get_max_header_normalized(manifests)
+        comp.duckdb_client.open_connection()
+        try:
+            comp._create_result_table("report", max_header)
+            for manifest in manifests:
+                comp._load_report_chunks_to_duckdb(manifest, "report")
+            out_path = os.path.join(self.tmp_dir, "out.csv")
+            comp.duckdb_client.export_to_csv("report", out_path, max_header)
+        finally:
+            comp.duckdb_client.close()
+
+        with open(out_path, encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        return rows[0], {row[0]: dict(zip(rows[0], row)) for row in rows[1:]}
+
+    def test_report_carrying_both_case_variants_loads(self):
+        """THE reported failure, through the production loading path. 1.2.1 raises
+        UserException here; every release before it loaded the report."""
+        header, rows = self._load(
+            ["identity__LineItemId", "resourceTags__user_owner"],
+            [("20260101-20260201",
+              [("identity", "LineItemId"),
+               ("resourceTags", "user:Owner"),
+               ("resourceTags", "user:owner")],
+              [["li1", "UPPER-VALUE", "lower-value"]])],
+        )
+
+        self.assertEqual(header, ["identity__LineItemId",
+                                  "resourceTags__user_owner",
+                                  "resourceTags__user_owner_1"])
+        # The physically-first variant takes the column the configuration already has, and
+        # the second gets its own -- both tags keep their own value, neither is collapsed.
+        self.assertEqual(rows["li1"]["resourceTags__user_owner"], "UPPER-VALUE")
+        self.assertEqual(rows["li1"]["resourceTags__user_owner_1"], "lower-value")
+
+    def test_period_listing_the_pair_in_the_other_order_loads(self):
+        """1.2.1 aborts the whole run on the second period here.
+
+        It now loads, and this test pins the accepted trade-off: because the header override
+        is positional, the reordered period's two values ARE exchanged relative to the first
+        period's. That is preferred over an abort which also fires on reports that were never
+        reordered and which leaves the configuration permanently failing."""
+        pair = [("resourceTags", "user:Team"), ("resourceTags", "user:team")]
+        header, rows = self._load(
+            [],
+            [("20260301-20260401", [("identity", "LineItemId")] + pair, [["li1", "TEAM-a", "team-a"]]),
+             ("20260401-20260501", [("identity", "LineItemId")] + pair[::-1], [["li2", "team-b", "TEAM-b"]])],
+        )
+
+        self.assertEqual(header, ["identity__LineItemId",
+                                  "resourceTags__user_Team",
+                                  "resourceTags__user_team_1"])
+        self.assertEqual(rows["li1"]["resourceTags__user_Team"], "TEAM-a")
+        self.assertEqual(rows["li2"]["resourceTags__user_Team"], "team-b")
 
 
 class TestDateParsing(unittest.TestCase):

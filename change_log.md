@@ -11,6 +11,11 @@
   success, an affected configuration failed identically on every subsequent run, and the
   message asked the user to contact support for a reprocessing procedure that does not
   exist. Case-differing tag columns are still kept distinct — that fix (1.2.1) stays.
+  Trade-off, stated plainly: the per-file header override is applied positionally, so for a
+  report that *genuinely* lists a case-differing tag pair in a different order in different
+  billing periods, those two tags' values are exchanged for the reordered period. Releases
+  before 1.2.1 handled that input worse still, collapsing the pair and losing one tag's
+  values altogether. If you rely on such a pair, check the two columns after a backfill.
 - fix: parse plain `YYYY-MM-DD` values of `min_date_since` / `max_date` directly instead of
   through dateparser, which emitted a Python `DeprecationWarning` about ambiguous dates on
   every single run, since `min_date_since` defaults to a plain date. The warning names a

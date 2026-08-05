@@ -255,8 +255,7 @@ class Component(ComponentBase):
         # applied as an explicit header override in DuckDB, so source columns that differ
         # only in letter case are kept distinct instead of being collapsed.
         original_cols = [col['category'] + '/' + col['name'] for col in manifest['columns']]
-        # Case-preserved normalized names *before* dedup — needed to detect columns that
-        # physically collide case-insensitively within this file.
+        # Case-preserved normalized names *before* dedup.
         pre_dedup = self._kbc_normalize_header(original_cols)
         normalized_temp = self._dedupe_header(pre_dedup)
 
