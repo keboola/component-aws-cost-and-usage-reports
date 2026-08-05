@@ -1,3 +1,22 @@
+**1.2.2**
+
+- fix: columns whose names differ only in letter case are now matched by name instead of
+  by their position in the report file. A billing period that lists a case-colliding tag
+  pair (e.g. `resourceTags/user:Team` and `resourceTags/user:team`) in a different order
+  than another period is loaded correctly instead of aborting, with each tag's data under
+  its own column. This also removes a false abort that needed no reordering at all: a
+  report that starts carrying a second case variant of a tag now simply gets an additional
+  column. Column names already recorded in the configuration state are reused unchanged,
+  so existing output tables keep the columns they have.
+- The 1.1.6 safety guard is superseded and removed. With name-based matching there is no
+  positional swap left to protect against, so the abort — and its "contact Keboola
+  support so the affected report can be reprocessed" instruction, which pointed at no
+  actual procedure — is gone.
+- fix: parse plain `YYYY-MM-DD` values of `min_date_since` / `max_date` directly rather
+  than through dateparser, which emitted a Python `DeprecationWarning` about ambiguous
+  dates on every single run and read like a component failure in the job log. Relative
+  values such as `5 days ago` or `yesterday` still go through dateparser.
+
 **1.1.6**
 
 - safety: fail loudly instead of silently swapping data if a report lists a

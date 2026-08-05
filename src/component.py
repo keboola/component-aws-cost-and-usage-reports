@@ -11,7 +11,6 @@ import dateparser
 import pytz
 from botocore.exceptions import ClientError
 from keboola.component.base import ComponentBase
-from keboola.component.exceptions import UserException
 
 from duckdb_client import DuckDBClient
 
@@ -36,6 +35,12 @@ KEY_REPORT_PATH_PREFIX = 'report_path_prefix'
 # list of mandatory parameters=> if some is missing, component will fail with readable message on initialization.
 MANDATORY_PARS = [KEY_AWS_PARAMS, KEY_REPORT_PATH_PREFIX]
 MANDATORY_IMAGE_PARS = []
+
+# Trailing '_<number>' appended to a column name to disambiguate case-colliding columns.
+DEDUPE_SUFFIX_PATTERN = re.compile(r'^(?P<base>.+)_(?P<index>\d+)$')
+
+# Date format accepted verbatim, without going through dateparser.
+ISO_DATE_FORMAT = '%Y-%m-%d'
 
 
 class Component(ComponentBase):
@@ -248,26 +253,16 @@ class Component(ComponentBase):
         logging.info(
             f"Loading report ID {manifest['assemblyId']} for period {manifest['period']}"
             f" in {len(manifest['reportKeys'])} report chunks.")
-        # Build the full, physically-ordered list of normalized column names for the file.
-        # These names are case-insensitively unique (thanks to _dedupe_header) and are
-        # applied as an explicit header override in DuckDB, so source columns that differ
-        # only in letter case are kept distinct instead of being collapsed.
+        # Build the full, physically-ordered list of output column names for the file.
+        # The names are resolved by case-preserved identity rather than by physical
+        # position, so a period that lists a case-colliding tag pair in a different order
+        # than another period still maps each tag onto its own column. They are applied as
+        # an explicit header override in DuckDB, so source columns that differ only in
+        # letter case are kept distinct instead of being collapsed.
         original_cols = [col['category'] + '/' + col['name'] for col in manifest['columns']]
-        # Case-preserved normalized names *before* dedup — needed to detect columns that
-        # physically collide case-insensitively within this file.
-        pre_dedup = self._kbc_normalize_header(original_cols)
-        normalized_temp = self._dedupe_header(pre_dedup)
+        column_names = self._resolve_column_names(self._kbc_normalize_header(original_cols))
+        self._assert_names_loadable(column_names, manifest['period'])
 
-        # Map to canonical names from self.last_header (table columns), keeping every
-        # physical column so the override matches the CSV column count and order.
-        canonical_map = {c.lower(): c for c in self.last_header}
-        column_names = [canonical_map.get(norm_temp.lower(), norm_temp) for norm_temp in normalized_temp]
-
-        # Positional header override is only safe if a case-colliding tag pair keeps the
-        # same physical order across billing periods. Fail loudly (rather than silently
-        # swap the two tags' data) if this period orders such a pair differently from the
-        # canonical output header.
-        self._guard_no_column_order_swap(pre_dedup, normalized_temp, column_names, manifest['period'])
         is_zip = True if manifest['reportKeys'] and manifest['reportKeys'][0].endswith('zip') else False
         if is_zip:
             logging.info("Processing zip file via local processing")
@@ -408,13 +403,9 @@ class Component(ComponentBase):
         # normalize
         man_cols = [col['category'] + '/' + col['name']
                     for col in manifest['columns']]
-        man_cols = self._kbc_normalize_header(man_cols)
-        man_cols = self._dedupe_header(man_cols)
-
-        # Map to canonical names from self.last_header (case-insensitive match)
-        # This ensures COPY INTO uses column names that exist in the table
-        canonical_map = {c.lower(): c for c in self.last_header}
-        return [canonical_map.get(c.lower(), c) for c in man_cols]
+        # Resolved against self.last_header, so the output header uses the same names the
+        # per-file header override will use when the report chunks are loaded.
+        return self._resolve_column_names(self._kbc_normalize_header(man_cols))
 
     def _kbc_normalize_header(self, header):
         normalized = []
@@ -425,63 +416,133 @@ class Component(ComponentBase):
             normalized.append(new_h)
         return normalized
 
-    def _dedupe_header(self, header, index_separator='_'):
-        new_header = list()
-        new_header_lower = list()
-        dup_cols = dict()
-        for c in header:
-            if c.lower() in new_header_lower:
-                new_index = dup_cols.get(c.lower(), 0) + 1
-                new_header.append(c + index_separator + str(new_index))
-                dup_cols[c.lower()] = new_index
-            else:
-                new_header_lower.append(c.lower())
-                new_header.append(c)
-        return new_header
+    def _resolve_column_names(self, source_header):
+        """
+        Assign an output column name to every physical column of a report file.
+
+        Columns are identified by their case-preserved normalized name, not by their
+        physical position. AWS CUR reports can list two tags whose sanitized names differ
+        only in letter case (e.g. ``resourceTags/user:Team`` for team ownership and
+        ``resourceTags/user:team`` for a k8s pod label), and the physical order of such a
+        pair is not stable across billing periods. Since the DuckDB header override is
+        positional, resolving by identity is what keeps each tag's data under its own
+        column whichever order a period happens to use.
+
+        Names already present in ``self.last_header`` (the output header carried in state)
+        are reused verbatim, so existing configurations keep their column names: a suffixed
+        name such as ``resourceTags__user_team_1`` records that the variant spelled
+        ``resourceTags__user_team`` owns that column. A case variant that is new to the
+        report is given an additional column — nothing is ever renamed.
+
+        The result is case-insensitively unique by construction, which is what DuckDB
+        requires of a ``names=[...]`` override.
+        """
+        # Fold any case-ambiguous entries first: a header carried over from an older
+        # version may hold two bare variants ("..._Team" and "..._team"), which cannot
+        # both exist as DuckDB columns. This is the same folding _get_max_header_normalized
+        # applies to the final header, so it is idempotent here.
+        known = self._merge_case_variants(self.last_header)
+        registry, known_collisions = self._build_variant_registry(known)
+        canonical_map = {name.lower(): name for name in known}
+        taken_lower = {name.lower() for name in known}
+
+        positions_by_name = {}
+        for position, name in enumerate(source_header):
+            positions_by_name.setdefault(name.lower(), []).append(position)
+
+        resolved = [None] * len(source_header)
+        # Both the groups and the variants within a group are walked in sorted order, so
+        # the outcome depends only on *which* columns the file has, never on their order.
+        for lower_name in sorted(positions_by_name):
+            positions = positions_by_name[lower_name]
+            if len(positions) == 1 and lower_name not in known_collisions:
+                # A single physical column with no known case variants: keep folding it
+                # onto the canonical spelling, so a tag whose letter case merely drifts
+                # between periods stays in one column (unchanged behaviour).
+                source_name = source_header[positions[0]]
+                name = canonical_map.get(lower_name)
+                if name is None:
+                    name = self._next_free_name(source_name, taken_lower)
+                resolved[positions[0]] = name
+                taken_lower.add(name.lower())
+                continue
+
+            variants = {}
+            for position in positions:
+                variants.setdefault(source_header[position], []).append(position)
+            for variant in sorted(variants):
+                owned = list(registry.get(variant, []))
+                for position in variants[variant]:
+                    # Columns with an identical name *and* case are indistinguishable and
+                    # can only be told apart by position; everything else goes by identity.
+                    name = owned.pop(0) if owned else self._next_free_name(variant, taken_lower)
+                    resolved[position] = name
+                    taken_lower.add(name.lower())
+
+        return resolved
+
+    @classmethod
+    def _build_variant_registry(cls, known_header):
+        """
+        Read back which case variant owns which output column.
+
+        Returns ``(registry, collisions)`` where ``registry`` maps a case-preserved source
+        name to the output columns assigned to it (ordered by dedup index) and
+        ``collisions`` holds the lower-cased source names known to have more than one
+        variant. A base recorded with several variants means later files must resolve that
+        name by identity even when they carry only one of the variants.
+        """
+        registry = {}
+        variants_per_base = {}
+        for name in known_header:
+            base, index = cls._split_dedupe_suffix(name)
+            registry.setdefault(base, []).append((index, name))
+            variants_per_base.setdefault(base.lower(), set()).add(name)
+
+        registry = {base: [name for _, name in sorted(entries)] for base, entries in registry.items()}
+        collisions = {base for base, names in variants_per_base.items() if len(names) > 1}
+        return registry, collisions
 
     @staticmethod
-    def _guard_no_column_order_swap(pre_dedup_header, deduped_header, column_names, period):
+    def _split_dedupe_suffix(name):
         """
-        Fail loudly instead of silently swapping data when a report orders a
-        case-colliding tag pair differently across billing periods.
+        Split an output column name into its case-preserved source name and dedup index.
 
-        The DuckDB header override (``names=[...]``) is positional: physical column *i*
-        is labelled ``column_names[i]``. That is only trustworthy when a case-colliding
-        pair (e.g. ``resourceTags/user:Team`` vs ``resourceTags/user:team``) keeps the
-        same physical order in every period, because the output header
-        (``self.last_header``) fixes one canonical name per case variant. If a period
-        lists the pair in the opposite order, the positional mapping would put one tag's
-        data under the other tag's column. We detect exactly that crossing and abort
-        before anything is written, rather than corrupt the output.
-
-        Scoped strictly to columns that physically collide case-insensitively *within*
-        this file (so ``_dedupe_header`` had to disambiguate them with a suffix).
-        Non-colliding case variants that ``_merge_case_variants`` folds across periods
-        have only a single variant per file, are never part of a within-file collision,
-        and so never trigger this guard — existing configurations are unaffected.
+        Disambiguated names are built as ``<source name>_<index>``, so the base of an
+        already-assigned name tells us which case variant owns that column.
         """
-        lower_counts = {}
-        for name in pre_dedup_header:
-            key = name.lower()
-            lower_counts[key] = lower_counts.get(key, 0) + 1
-        collision_bases = {key for key, count in lower_counts.items() if count > 1}
-        if not collision_bases:
-            return
+        match = DEDUPE_SUFFIX_PATTERN.match(name)
+        if match:
+            return match.group('base'), int(match.group('index'))
+        return name, 0
 
-        for pre, deduped, canonical in zip(pre_dedup_header, deduped_header, column_names):
-            if pre.lower() not in collision_bases:
-                continue
-            # column_names[i] always equals deduped_header[i] case-insensitively, so a
-            # case-sensitive difference here means this physical column was mapped onto
-            # the OTHER case variant's canonical slot -> the pair's data would be swapped.
-            if canonical != deduped:
-                raise UserException(
-                    f"Report columns are inconsistently ordered across billing periods for a "
-                    f"case-differing tag pair (near column '{pre}' in period '{period}'). "
-                    f"Loading it by position would swap the two tags' data between columns "
-                    f"'{deduped}' and '{canonical}'. Aborting to avoid writing swapped data. "
-                    f"Please contact Keboola support so the affected report can be reprocessed."
-                )
+    @staticmethod
+    def _next_free_name(base, taken_lower):
+        """Return ``base``, or ``base_<n>`` with the lowest n that is not taken yet."""
+        if base.lower() not in taken_lower:
+            return base
+        index = 1
+        while f"{base}_{index}".lower() in taken_lower:
+            index += 1
+        return f"{base}_{index}"
+
+    @staticmethod
+    def _assert_names_loadable(column_names, period):
+        """
+        Internal invariant: a header override must be case-insensitively unique.
+
+        DuckDB resolves identifiers case-insensitively and rejects a ``names=[...]``
+        override holding two names that differ only in letter case.
+        ``_resolve_column_names`` guarantees uniqueness by construction, so this is a
+        tripwire against a future regression — not a state a configuration can reach.
+        """
+        seen = set()
+        for name in column_names:
+            if name.lower() in seen:
+                raise RuntimeError(
+                    f"Internal error: resolved a duplicate output column '{name}' for period "
+                    f"'{period}'. This is a bug in the column name resolution.")
+            seen.add(name.lower())
 
     # TODO: support for datatypes
     def _create_result_table(self, report_name, max_header):
@@ -503,7 +564,7 @@ class Component(ComponentBase):
         """
         # Parse start date
         if since:
-            start_date = dateparser.parse(since)
+            start_date = self._parse_date(since)
             if not start_date:
                 raise ValueError(f"Unable to parse start date: {since}")
         else:
@@ -511,13 +572,29 @@ class Component(ComponentBase):
 
         # Parse end date
         if until and until != 'now':
-            end_date = dateparser.parse(until)
+            end_date = self._parse_date(until)
             if not end_date:
                 raise ValueError(f"Unable to parse end date: {until}")
         else:
             end_date = datetime.now()
 
         return start_date, end_date
+
+    @staticmethod
+    def _parse_date(value):
+        """
+        Parse a date value, taking a plain ``YYYY-MM-DD`` date without dateparser.
+
+        dateparser probes several candidate formats and emits a DeprecationWarning about
+        an ambiguous day-of-month on every call — including for unambiguous dates, and
+        therefore on every single run, since ``min_date_since`` defaults to a plain date.
+        The warning reads like a component failure in the job log. Relative expressions
+        such as ``5 days ago`` or ``yesterday`` keep going through dateparser.
+        """
+        try:
+            return datetime.strptime(value, ISO_DATE_FORMAT)
+        except (TypeError, ValueError):
+            return dateparser.parse(value)
 
 
 """
